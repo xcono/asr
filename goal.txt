@@ -1,0 +1,27 @@
+The project is a standalone ASR / STT golang service responsible for user input for realtime voice agent.
+
+The service includes: 
+- silero-go vad
+- ASR/STT model interface (gigaAM local, eleven labs remote),
+- embedded NATS Jetstream used for persisting events and add the ability to subscribe.
+
+Events:
+- VAD: StartSpeaking, StopSpeaking
+- STT: Message (timestamp, text, + voice file id)
+
+Codebase:
+The service codebase is already written and tested.
+The code components are implemented in the `/home/xcono/src/github.com/xcono/voices` (copy code from there to this project).
+
+
+Config:
+The service reads config.json to get info about:
+- VAD barge-in/release delay durations
+- STT provider config (JSON structure is predefined based on arguments required to run a SST model)
+- NATS settings
+
+Dev-ops:
+Our goal is to avoid python in the codebase and prefer golang if possible, but it looks like GigaAM runs via python.
+
+Development:
+The project is developed by AI coding agents iteratively and incrementally.
