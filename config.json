@@ -1,0 +1,26 @@
+{
+  "vad": {
+    "model_path": "pkg/vad/silero_vad.onnx",
+    "threshold": 0.30,
+    "hysteresis": 0.15,
+    "barge_in_ms": 64,
+    "release_ms": 700,
+    "end_of_turn_ms": 800,
+    "preroll_ms": 300
+  },
+  "stt": {
+    "provider": "gigaam",
+    "gigaam": {
+      "base_url": "http://localhost:8008/v1",
+      "model": ""
+    },
+    "elevenlabs": {
+      "api_key": "",
+      "model": ""
+    }
+  },
+  "nats": {
+    "port": 4222,
+    "store_dir": "/tmp/nats"
+  }
+}
