@@ -40,7 +40,15 @@ func main() {
 
 func run(cfg *config.Config) error {
 	// --- NATS ---
-	ns, err := nats.NewServer(cfg.NATS.Port, cfg.NATS.StoreDir)
+	vadMaxAge, err := parseMaxAge(cfg.NATS.VADMaxAge, 72*time.Hour)
+	if err != nil {
+		return fmt.Errorf("nats vad_max_age: %w", err)
+	}
+	sttMaxAge, err := parseMaxAge(cfg.NATS.STTMaxAge, 72*time.Hour)
+	if err != nil {
+		return fmt.Errorf("nats stt_max_age: %w", err)
+	}
+	ns, err := nats.NewServer(cfg.NATS.Port, cfg.NATS.StoreDir, vadMaxAge, sttMaxAge)
 	if err != nil {
 		return fmt.Errorf("nats: %w", err)
 	}
@@ -55,15 +63,7 @@ func run(cfg *config.Config) error {
 	defer model.Close()
 
 	// Build Timing from config.
-	th, hy, bi, rm, eot, pr := cfg.VAD.ToTiming()
-	timing := vad.Timing{
-		Threshold:   th,
-		Hysteresis:  hy,
-		BargeInMs:   bi,
-		ReleaseMs:   rm,
-		EndOfTurnMs: eot,
-		PrerollMs:   pr,
-	}
+	timing := cfg.VAD.ToTiming()
 
 	// --- Audio capture ---
 	restore, err := audio.SilenceStderr()
@@ -132,6 +132,8 @@ func run(cfg *config.Config) error {
 			if err := ns.PublishMessage(ev.Timestamp, ev.Text, ev.VoiceFileID); err != nil {
 				log.Printf("nats: publish message: %v", err)
 			}
+		case asr.SpeechError:
+			log.Printf("asr: pipeline error: %v", ev.Err)
 		}
 	}
 
@@ -139,4 +141,19 @@ func run(cfg *config.Config) error {
 		log.Printf("note: tolerated %d mic input overflow(s)", n)
 	}
 	return nil
+}
+
+// parseMaxAge parses a duration string from config, returning the fallback
+// when the input is empty (the config layer default is "72h", so the fallback
+// is belt-and-braces for callers that bypass config defaults). A non-empty
+// invalid string is an error.
+func parseMaxAge(s string, fallback time.Duration) (time.Duration, error) {
+	if s == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("parse %q: %w", s, err)
+	}
+	return d, nil
 }

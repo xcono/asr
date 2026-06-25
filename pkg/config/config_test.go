@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/xcono/vox/pkg/vad"
 )
 
 func TestLoad_Defaults(t *testing.T) {
@@ -40,6 +42,8 @@ func TestLoad_Defaults(t *testing.T) {
 	// NATS defaults
 	assert.Equal(t, 4222, cfg.NATS.Port)
 	assert.Equal(t, "/tmp/nats", cfg.NATS.StoreDir)
+	assert.Equal(t, "72h", cfg.NATS.VADMaxAge)
+	assert.Equal(t, "72h", cfg.NATS.STTMaxAge)
 }
 
 func TestLoad_FullConfig(t *testing.T) {
@@ -68,8 +72,10 @@ func TestLoad_FullConfig(t *testing.T) {
 			},
 		},
 		NATS: NATSConfig{
-			Port:     9090,
-			StoreDir: "/data/nats",
+			Port:      9090,
+			StoreDir:  "/data/nats",
+			VADMaxAge: "24h",
+			STTMaxAge: "48h",
 		},
 	}
 
@@ -98,6 +104,8 @@ func TestLoad_FullConfig(t *testing.T) {
 	// NATS
 	assert.Equal(t, 9090, cfg.NATS.Port)
 	assert.Equal(t, "/data/nats", cfg.NATS.StoreDir)
+	assert.Equal(t, "24h", cfg.NATS.VADMaxAge)
+	assert.Equal(t, "48h", cfg.NATS.STTMaxAge)
 }
 
 func TestLoad_MissingFile(t *testing.T) {
@@ -154,13 +162,15 @@ func TestToTiming(t *testing.T) {
 		EndOfTurnMs: 900,
 		PrerollMs:   250,
 	}
-	th, hy, bi, rel, eot, pre := v.ToTiming()
-	assert.Equal(t, float32(0.40), th)
-	assert.Equal(t, float32(0.10), hy)
-	assert.Equal(t, 96, bi)
-	assert.Equal(t, 600, rel)
-	assert.Equal(t, 900, eot)
-	assert.Equal(t, 250, pre)
+	got := v.ToTiming()
+	assert.Equal(t, float32(0.40), got.Threshold)
+	assert.Equal(t, float32(0.10), got.Hysteresis)
+	assert.Equal(t, 96, got.BargeInMs)
+	assert.Equal(t, 600, got.ReleaseMs)
+	assert.Equal(t, 900, got.EndOfTurnMs)
+	assert.Equal(t, 250, got.PrerollMs)
+	// Ensure the returned value is a proper vad.Timing, not just a config-shaped copy.
+	assert.IsType(t, vad.Timing{}, got)
 }
 
 // --- helpers ---

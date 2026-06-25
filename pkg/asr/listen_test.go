@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -126,5 +127,35 @@ func TestListenSkipsEmptyTranscription(t *testing.T) {
 	}
 	if got[0].Kind != SpeechStart || got[1].Kind != SpeechEnd {
 		t.Errorf("got kinds %v,%v; want SpeechStart,SpeechEnd", got[0].Kind, got[1].Kind)
+	}
+}
+
+// errSource yields a non-EOF error on its first Read, simulating a real
+// device / transport failure (as opposed to a finite source's io.EOF).
+type errSource struct{ err error }
+
+func (s *errSource) Read() ([]int16, error) { return nil, s.err }
+
+// TestListenSurfacesSourceError guards the SpeechError contract: a non-EOF
+// source error emits exactly one SpeechError event carrying the cause before
+// the channel closes. io.EOF must NOT emit SpeechError (it's a clean shutdown
+// for finite sources), which the existing TestListen* tests already assert
+// via their exact event counts.
+func TestListenSurfacesSourceError(t *testing.T) {
+	src := &errSource{err: errors.New("device disconnected")}
+	got := collectEvents(Listen(context.Background(), src,
+		&fakeDetector{probs: []float32{0.0}}, fakeRecognizer{}, vad.DefaultTiming()), time.Second)
+
+	if len(got) != 1 {
+		t.Fatalf("got %d events %+v, want 1 SpeechError", len(got), got)
+	}
+	if got[0].Kind != SpeechError {
+		t.Fatalf("event 0 = %v, want SpeechError", got[0].Kind)
+	}
+	if got[0].Err == nil {
+		t.Fatal("SpeechError event must carry the cause in Err")
+	}
+	if got[0].Err.Error() != "device disconnected" {
+		t.Fatalf("Err = %q, want %q", got[0].Err.Error(), "device disconnected")
 	}
 }

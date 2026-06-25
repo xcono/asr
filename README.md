@@ -100,21 +100,39 @@ Streams use the `vox.vad.>` and `vox.stt.>` wildcard subjects, so any future sub
 
 ## Infrastructure
 
-### ONNX Runtime (required)
+All three native dep groups (PortAudio headers, ONNX Runtime, Silero VAD model) are installable with one command:
+
+```bash
+make deps                  # PortAudio + ONNX Runtime + Silero VAD model
+# Or individually:
+make deps-portaudio       # sudo apt install portaudio19-dev (Debian/Ubuntu)
+make deps-ort              # download + extract ONNX Runtime to ~/.local/
+make deps-model            # fetch the Silero VAD v5 ONNX model to pkg/vad/
+```
+
+`ORT_VERSION` (default `1.18.1`) and `SILERO_VERSION` (default `v5.1.2`) are overridable on the make command line.
+
+### ONNX Runtime
 
 The VAD package uses cgo. Set `ORT` to your ONNX Runtime install:
 
 ```bash
 export ORT=~/.local/onnxruntime-linux-x64-1.18.1
-# Or: make ORT=/path/to/it
+# Or: make ORT=/path/to/it  (or  make ORT_VERSION=1.18.1 deps-ort)
 ```
 
 The Makefile sets `C_INCLUDE_PATH`, `LIBRARY_PATH`, and `LD_RUN_PATH` from `ORT`. Without these the linker fails (`cannot find -lonnxruntime`).
 
+### Silero VAD model
+
+The ONNX model ships from `snakers4/silero-vad` ([v5.1.2 tag](https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx)); it is gitignored (`*.onnx`) and not committed. `make deps-model` first tries to copy it from the go modcache (the `hylarucoder/silero-vad-onnx-go` fork bundles a byte-identical copy in its `testfiles/`), falling back to a direct download from upstream if the modcache is unavailable.
+
+> ⚠️ The fork's cgo bridge pins the Silero **v5** state layout (`stateLen = 2*1*128`, `contextLen = 64`). The v6 model changed this shape — do not bump `SILERO_VERSION` to a v6 tag without updating the bridge first.
+
 ### PortAudio (required for mic capture)
 
 ```bash
-apt install portaudio19-dev
+make deps-portaudio      # or:  apt install portaudio19-dev
 ```
 
 ### GigaAM STT server (external dependency)

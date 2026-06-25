@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/xcono/vox/pkg/audio"
 )
@@ -21,8 +22,13 @@ import (
 type Transcriber struct {
 	BaseURL string       // e.g. "http://localhost:8008/v1"
 	Model   string       // optional; sent as the "model" form field
-	Client  *http.Client // nil => http.DefaultClient
+	Client  *http.Client // nil => a client with DefaultTimeout
 }
+
+// DefaultTimeout caps a single Transcribe HTTP request so a hung STT server
+// cannot hold a transcription goroutine indefinitely (the listen ctx is
+// process-lifetime and won't cancel it). Override via Transcriber.Client.
+const DefaultTimeout = 30 * time.Second
 
 // Transcribe encodes the samples as a WAV clip and POSTs them as a multipart
 // upload to {BaseURL}/audio/transcriptions, returning the recognised text.
@@ -55,7 +61,7 @@ func (tr *Transcriber) Transcribe(ctx context.Context, samples []int16, rate int
 
 	client := tr.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: DefaultTimeout}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

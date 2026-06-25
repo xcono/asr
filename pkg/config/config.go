@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/xcono/vox/pkg/vad"
 )
 
 // Config is the top-level configuration for the vox service.
@@ -45,8 +47,10 @@ type ElevenLabsConfig struct {
 
 // NATSConfig holds the embedded NATS server configuration.
 type NATSConfig struct {
-	Port     int    `json:"port"`      // Client port (default 4222)
-	StoreDir string `json:"store_dir"` // Jetstream storage directory (default "/tmp/nats")
+	Port      int    `json:"port"`        // Client port (default 4222)
+	StoreDir  string `json:"store_dir"`   // Jetstream storage directory (default "/tmp/nats")
+	VADMaxAge string `json:"vad_max_age"` // MaxAge for the VAD stream (default "72h"); 0 disables
+	STTMaxAge string `json:"stt_max_age"` // MaxAge for the STT stream (default "72h"); 0 disables
 }
 
 // Load reads config.json from the given path and unmarshals it.
@@ -102,11 +106,25 @@ func (c *Config) setDefaults() {
 	if c.NATS.StoreDir == "" {
 		c.NATS.StoreDir = "/tmp/nats"
 	}
+	if c.NATS.VADMaxAge == "" {
+		c.NATS.VADMaxAge = "72h"
+	}
+	if c.NATS.STTMaxAge == "" {
+		c.NATS.STTMaxAge = "72h"
+	}
 }
 
-// ToTiming converts VADConfig fields to individual return values suitable for
-// constructing a vad.Timing struct. This lives here rather than in the vad
-// package to avoid a circular import — config does not import vad.
-func (v *VADConfig) ToTiming() (threshold, hysteresis float32, bargeInMs, releaseMs, endOfTurnMs, prerollMs int) {
-	return v.Threshold, v.Hysteresis, v.BargeInMs, v.ReleaseMs, v.EndOfTurnMs, v.PrerollMs
+// ToTiming builds the vad.Timing for the configured VAD parameters. Lives
+// here (rather than as a vad constructor) so all config schema concerns stay
+// in one package; config importing vad adds no cycle since vad imports
+// nothing from this project.
+func (v *VADConfig) ToTiming() vad.Timing {
+	return vad.Timing{
+		Threshold:   v.Threshold,
+		Hysteresis:  v.Hysteresis,
+		BargeInMs:   v.BargeInMs,
+		ReleaseMs:   v.ReleaseMs,
+		EndOfTurnMs: v.EndOfTurnMs,
+		PrerollMs:   v.PrerollMs,
+	}
 }

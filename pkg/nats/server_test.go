@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewServerStartAndClose(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	require.NotNil(t, s.Conn())
@@ -19,7 +19,7 @@ func TestNewServerStartAndClose(t *testing.T) {
 }
 
 func TestPublishVADEvents(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -32,7 +32,7 @@ func TestPublishVADEvents(t *testing.T) {
 }
 
 func TestPublishMessageEvent(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -42,7 +42,7 @@ func TestPublishMessageEvent(t *testing.T) {
 }
 
 func TestSubscribeAndReceiveVADStart(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -65,7 +65,7 @@ func TestSubscribeAndReceiveVADStart(t *testing.T) {
 }
 
 func TestSubscribeAndReceiveVADStop(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -87,7 +87,7 @@ func TestSubscribeAndReceiveVADStop(t *testing.T) {
 }
 
 func TestSubscribeAndReceiveMessage(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -111,7 +111,7 @@ func TestSubscribeAndReceiveMessage(t *testing.T) {
 }
 
 func TestSubscribeAndReceiveMessageEmptyVoiceFileID(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 
@@ -134,7 +134,7 @@ func TestSubscribeAndReceiveMessageEmptyVoiceFileID(t *testing.T) {
 }
 
 func TestStreamsExist(t *testing.T) {
-	s, err := NewServer(0, t.TempDir())
+	s, err := NewServer(0, t.TempDir(), 0, 0)
 	require.NoError(t, err)
 	defer s.Close()
 

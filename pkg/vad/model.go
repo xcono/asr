@@ -1,8 +1,12 @@
 package vad
 
-// The fork keeps the upstream module path; go.mod has a `replace` pointing it
-// at hylarucoder/silero-vad-onnx-go.
-import "github.com/streamer45/silero-vad-go/speech"
+import (
+	"fmt"
+
+	// The fork keeps the upstream module path; go.mod has a `replace` pointing it
+	// at hylarucoder/silero-vad-onnx-go.
+	"github.com/streamer45/silero-vad-go/speech"
+)
 
 // Model wraps the Silero detector: it normalises an int16 window to float32
 // [-1,1] and returns the per-window speech probability. The detector is
@@ -27,9 +31,14 @@ func NewModel(modelPath string) (*Model, error) {
 	return &Model{sd: sd, buf: make([]float32, Window)}, nil
 }
 
-// Infer returns the Silero speech probability for one window. window should be
-// Window samples; a shorter window leaves the tail of the previous buffer.
+// Infer returns the Silero speech probability for one window. window must be
+// exactly Window samples: a shorter window would leave the previous window's
+// tail in the buffer and skew the probability, so a length mismatch returns an
+// error rather than running on stale data.
 func (m *Model) Infer(window []int16) (float32, error) {
+	if len(window) != Window {
+		return 0, fmt.Errorf("vad: infer window len %d != %d", len(window), Window)
+	}
 	for i, s := range window {
 		m.buf[i] = float32(s) / 32768
 	}

@@ -21,6 +21,8 @@
   },
   "nats": {
     "port": 4222,
-    "store_dir": "/tmp/nats"
+    "store_dir": "/tmp/nats",
+    "vad_max_age": "72h",
+    "stt_max_age": "72h"
   }
 }

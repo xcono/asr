@@ -18,8 +18,10 @@ type Server struct {
 
 // NewServer starts an embedded NATS server with Jetstream enabled.
 // port is the client port (e.g. 4222, or 0 for random), storeDir is the
-// Jetstream storage directory.
-func NewServer(port int, storeDir string) (*Server, error) {
+// Jetstream storage directory. vadMaxAge / sttMaxAge set MaxAge retention on
+// the VAD / STT streams respectively; a zero duration disables age-based
+// retention (unbounded) — pass a non-zero value in production.
+func NewServer(port int, storeDir string, vadMaxAge, sttMaxAge time.Duration) (*Server, error) {
 	opts := &server.Options{
 		Port:      port,
 		StoreDir:  storeDir,
@@ -49,7 +51,7 @@ func NewServer(port int, storeDir string) (*Server, error) {
 	}
 
 	s := &Server{ns: ns, nc: nc, js: js}
-	if err := s.setupStreams(); err != nil {
+	if err := s.setupStreams(vadMaxAge, sttMaxAge); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -73,18 +75,23 @@ func (s *Server) Close() {
 	}
 }
 
-// setupStreams creates the Jetstream streams for VAD and STT events.
-func (s *Server) setupStreams() error {
+// setupStreams creates the Jetstream streams for VAD and STT events. MaxAge
+// bounds disk usage: messages older than the duration are auto-evicted, so the
+// store self-trims over a long-lived mic capture session. A zero MaxAge
+// disables the limit (unbounded) — only suitable for tests.
+func (s *Server) setupStreams(vadMaxAge, sttMaxAge time.Duration) error {
 	streams := []*nats.StreamConfig{
 		{
 			Name:     "VAD",
 			Subjects: []string{"vox.vad.>"},
 			Replicas: 1,
+			MaxAge:   vadMaxAge,
 		},
 		{
 			Name:     "STT",
 			Subjects: []string{"vox.stt.>"},
 			Replicas: 1,
+			MaxAge:   sttMaxAge,
 		},
 	}
 	for _, cfg := range streams {

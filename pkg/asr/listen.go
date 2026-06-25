@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"io"
 	"sync"
 	"time"
 
@@ -27,13 +28,17 @@ type Recognizer interface {
 	Transcribe(ctx context.Context, samples []int16, rate int) (string, error)
 }
 
-// EventKind tags what happened on the channel.
+// EventKind tags what happened on the channel. SpeechError is terminal: the
+// pipeline hit an unexpected source/detector error and will close the channel
+// immediately after emitting it. io.EOF on a finite source and context
+// cancellation are clean shutdowns and do NOT emit SpeechError.
 type EventKind int
 
 const (
 	SpeechStart EventKind = iota // VAD confirmed onset — a turn began
 	SpeechEnd                    // VAD confirmed offset — the turn closed
 	SpeechText                   // transcription of the closed turn is ready
+	SpeechError                  // terminal pipeline error; Err carries the cause
 )
 
 func (k EventKind) String() string {
@@ -44,19 +49,23 @@ func (k EventKind) String() string {
 		return "SpeechEnd"
 	case SpeechText:
 		return "SpeechText"
+	case SpeechError:
+		return "SpeechError"
 	default:
 		return "Event(?)"
 	}
 }
 
-// Event is one signal from the listen loop. Text is set only for SpeechText.
-// Timestamp records when the event was created, and VoiceFileID associates the
-// transcription with an audio recording file (if any).
+// Event is one signal from the listen loop. Text is set only for SpeechText;
+// Err is set only for SpeechError. Timestamp records when the event was
+// created, and VoiceFileID associates the transcription with an audio
+// recording file (if any).
 type Event struct {
 	Kind        EventKind
 	Text        string
 	Timestamp   time.Time
 	VoiceFileID string
+	Err         error // populated for SpeechError
 }
 
 // Listen runs the capture → VAD → segment → transcribe turn pipeline and returns
@@ -88,12 +97,16 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 
 			frame, err := src.Read()
 			if err != nil {
-				return // EOF or transport error ends listening
+				if err != io.EOF {
+					emit(ctx, out, Event{Kind: SpeechError, Timestamp: time.Now(), Err: err})
+				}
+				return // EOF (clean) or transport error ends listening
 			}
 			pre.Push(frame)
 
 			prob, err := det.Infer(frame)
 			if err != nil {
+				emit(ctx, out, Event{Kind: SpeechError, Timestamp: time.Now(), Err: err})
 				return
 			}
 
