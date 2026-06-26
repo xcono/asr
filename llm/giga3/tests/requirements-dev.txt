@@ -1,0 +1,9 @@
+# Light deps for the asr_server.py contract tests (no torch, no gigaam, no GPU).
+#   python3 -m venv .venv-test && .venv-test/bin/pip install -r tests/requirements-dev.txt
+#   GIGAAM_SKIP_MODEL_LOAD=1 .venv-test/bin/pytest tests/ -v
+pytest
+fastapi
+httpx
+python-multipart
+soundfile
+numpy
