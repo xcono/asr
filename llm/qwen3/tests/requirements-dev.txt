@@ -1,0 +1,11 @@
+# Light test deps — no GPU/vLLM required.
+# Install: uv venv .venv-test && uv pip install --python .venv-test -r tests/requirements-dev.txt
+# Run:     ASR_SKIP_MODEL_LOAD=1 .venv-test/bin/pytest tests/test_ws_protocol.py -v
+fastapi
+uvicorn[standard]
+httpx
+numpy
+soundfile
+python-multipart
+pytest
+websockets

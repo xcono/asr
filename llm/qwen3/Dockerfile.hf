@@ -1,0 +1,62 @@
+# Qwen3-ASR OpenAI-compatible STT server — TRANSFORMERS backend, BATCH-ONLY.
+#
+# A/B counterpart to ./Dockerfile (vLLM). Entrypoint is `asr_server_hf.py` — one in-process
+# qwen_asr.Qwen3ASRModel.from_pretrained() (transformers backend, NO vLLM). It exposes:
+#   POST /v1/audio/transcriptions   (OpenAI-compatible batch — identical contract)
+#   WS   /v1/asr/stream             GATED OFF (transformers backend has no streaming state)
+#   GET  /health   GET /v1/models
+#
+# WHY A SEPARATE IMAGE
+#   Streaming (init/streaming/finish_streaming_transcribe) is vLLM-only in qwen_asr, so this
+#   image serves only the batch endpoint — exactly what `vad -stream=false` needs (one clip
+#   per utterance). Dropping vLLM also drops torch.compile, CUDA-graph startup, and the
+#   gpu_memory_utilization reservation model: the model just allocates its weights, which
+#   simplifies co-residence with qwen3-tts + Ollama on the one 16 GB card.
+#   For streaming (`vad -stream=true`), build/run ./Dockerfile (vLLM) instead.
+#
+# INSTALL DIFFERENCE vs ./Dockerfile
+#   vLLM image:  pip install "qwen-asr[vllm]"   (pulls vllm==0.14.0)
+#   this image:  pip install "qwen-asr"         (transformers backend only — no vllm)
+#   The cu128 torch 2.9.1 wheels are installed FIRST (Blackwell / sm_120 need cu128); the
+#   minimal qwen-asr then resolves transformers/etc. against that torch without a downgrade.
+#
+# Same CUDA 12.8 base as ./Dockerfile so the A/B differs only in the inference backend, not
+# the CUDA/driver surface.
+#
+# HEADLESS PREP: this Dockerfile is validated on the GPU host (NVIDIA Container Toolkit
+# required). DO NOT build here in the sandbox — no GPU.
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev build-essential ffmpeg libsox-dev sox curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+# cu128 torch wheels first (torch 2.9.1 ships cu128; required for sm_120 / Blackwell), then
+# the MINIMAL qwen-asr (transformers backend, no vLLM extra).
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir \
+        torch==2.9.1 torchaudio==2.9.1 torchvision==0.24.1 \
+        --index-url https://download.pytorch.org/whl/cu128 \
+    && python3 -m pip install --no-cache-dir "qwen-asr"
+
+RUN pip3 install --no-cache-dir fastapi "uvicorn[standard]" python-multipart soundfile numpy
+
+# OPTIONAL: FlashAttention 2 speeds up / shrinks memory for the 1.7B, but building flash-attn
+# on consumer sm_120 is fiddly and slow. Enable here AND set ASR_ATTN_IMPL=flash_attention_2.
+# Leave disabled to use transformers' default sdpa attention (works without a flash-attn wheel).
+#   RUN pip3 install --no-cache-dir flash-attn --no-build-isolation
+
+# ASR_LANGUAGE default mirrors the vLLM image (Russian primary). ASR_MODEL defaults to
+# Qwen/Qwen3-ASR-1.7B inside asr_server_hf.py; override via env / compose for 0.6B.
+ENV HF_HOME=/root/.cache/huggingface \
+    ASR_LANGUAGE=Russian
+COPY asr_server_hf.py /app/
+EXPOSE 8008
+
+# Single-process FastAPI server as PID 1, holding one from_pretrained() model (transformers,
+# no vLLM) and serving batch transcriptions on 0.0.0.0:8008. Runtime knobs come from the
+# environment: ASR_DTYPE, ASR_DEVICE_MAP, ASR_ATTN_IMPL, ASR_MAX_INFERENCE_BATCH_SIZE,
+# ASR_MAX_NEW_TOKENS, ASR_MODEL. See asr_server_hf.py for defaults.
+CMD ["python3", "/app/asr_server_hf.py"]
