@@ -76,7 +76,7 @@ File: `pkg/nats/events.go`
 - The publish path now returns a real error if JetStream rejects
   (e.g. no matching stream) — a regression here would surface as a test
   failure, since `setupStreams` creates both `VAD` and `STT` streams
-  covering `vox.vad.>` / `vox.stt.>`.
+  covering `vad.>` / `stt.>`.
 
 ## Out of scope
 - Migrating to the new `github.com/nats-io/nats.go/jetstream` package.

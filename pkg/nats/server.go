@@ -83,13 +83,13 @@ func (s *Server) setupStreams(vadMaxAge, sttMaxAge time.Duration) error {
 	streams := []*nats.StreamConfig{
 		{
 			Name:     "VAD",
-			Subjects: []string{"vox.vad.>"},
+			Subjects: []string{"vad.>"},
 			Replicas: 1,
 			MaxAge:   vadMaxAge,
 		},
 		{
 			Name:     "STT",
-			Subjects: []string{"vox.stt.>"},
+			Subjects: []string{"stt.>"},
 			Replicas: 1,
 			MaxAge:   sttMaxAge,
 		},

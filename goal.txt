@@ -25,3 +25,29 @@ Our goal is to avoid python in the codebase and prefer golang if possible, but i
 
 Development:
 The project is developed by AI coding agents iteratively and incrementally.
+
+
+
+1. Fact - this code moved from the `../voices`:
+  - Current repo is a result of decoupling the `../voices` project.
+  - We have moved the "ears" part - ASR, STT system with VAD in this folder `./stt`.
+  - The code was refactored after moving: config instead of flags, embeded NATS server, VAD settings tunning.
+  - The whole `../voices` project will be decoupled onto `stt`, `llm` and `tts` repositories.
+  - the NATS server is embeded in this golang app and allows to subscribe for listening the STT/VAD service events.
+  - the `../voices` repo will hold `llm` central logic part, it listens STT and sends streams to the TTS (or interrupts the TTS if an user is speaking)
+
+ 2. Requirements
+  - the `./stt` repo has branches named `master-*`, where `*` is ASR/STT model. The default branch is `master-giga` - russian ASR.\
+  - the branch `master` has codebase without docker implementation to avoid collision working with the .worktrees\
+
+ 3. Tasks STT
+  - rename `../voices/docker-compose.yaml` network to `voices`
+  - create NATS server as a `docker-compose` service in the `../voices/docker-compose.yaml`. Name the service - `nats`
+  - the project should use NATS server from config instead of the embedded (could be kept in the _tests environment if currently used in the tests)
+  - the STT events processing should be placed in the `./voices/run` package and wired to the loop/turn of the `llm` part of the project
+  - the current `sst` repo could be used as a standalone app OR as a library
+
+ 4. Tasks TTS
+  - create `../tts` folder
+  - init repo in the `../tts`
+  - write golang app/module implementing a TTS service (events listened: `vad.speaking.stop` on VAD speacking state OR `speaking` with text payload)

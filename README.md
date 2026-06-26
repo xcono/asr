@@ -5,9 +5,9 @@ Standalone ASR/STT Go service for a realtime voice agent. Runs VAD + transcripti
 ## Architecture
 
 ```
-Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → NATS "vox.vad.speaking.start"
-                                    ├─ SpeechEnd   → NATS "vox.vad.speaking.stop"
-                                    └─ SpeechText → NATS "vox.stt.message"
+Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → NATS "vad.speaking.start"
+                                    ├─ SpeechEnd   → NATS "vad.speaking.stop"
+                                    └─ SpeechText → NATS "stt.message"
 ```
 
 `asr.Listen` runs the full pipeline: audio capture → Silero VAD (FSM + preroll) → segment collection → batch transcription. Events are published to NATS JetStream for any subscriber to consume.
@@ -92,11 +92,11 @@ Three NATS subjects, two JetStream streams:
 
 | Subject | Stream | Event | Fields |
 |---------|--------|-------|--------|
-| `vox.vad.speaking.start` | VAD | `VADEvent` | `timestamp` |
-| `vox.vad.speaking.stop` | VAD | `VADEvent` | `timestamp` |
-| `vox.stt.message` | STT | `MessageEvent` | `timestamp`, `text`, `voice_file_id` |
+| `vad.speaking.start` | VAD | `VADEvent` | `timestamp` |
+| `vad.speaking.stop` | VAD | `VADEvent` | `timestamp` |
+| `stt.message` | STT | `MessageEvent` | `timestamp`, `text`, `voice_file_id` |
 
-Streams use the `vox.vad.>` and `vox.stt.>` wildcard subjects, so any future subjects under those prefixes are automatically captured.
+Streams use the `vad.>` and `stt.>` wildcard subjects, so any future subjects under those prefixes are automatically captured.
 
 ## Infrastructure
 
@@ -169,7 +169,7 @@ func main() {
     }
 
     // Subscribe to transcription messages
-    sub, err := js.Subscribe("vox.stt.message", func(msg *nats.Msg) {
+    sub, err := js.Subscribe("stt.message", func(msg *nats.Msg) {
         fmt.Printf("[%s] %s\n", msg.Subject, string(msg.Data))
         msg.Ack()
     }, nats.DeliverAll())
@@ -179,7 +179,7 @@ func main() {
     defer sub.Unsubscribe()
 
     // Or: subscribe to VAD events
-    sub2, err := js.Subscribe("vox.vad.>", func(msg *nats.Msg) {
+    sub2, err := js.Subscribe("vad.>", func(msg *nats.Msg) {
         fmt.Printf("[%s] %s\n", msg.Subject, string(msg.Data))
         msg.Ack()
     })

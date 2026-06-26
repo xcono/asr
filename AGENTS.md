@@ -79,9 +79,9 @@ only). See `README.md` for the full table of VAD parameters and their meaning.
 ## Architecture / data flow
 
 ```
-Mic → audio.Capture → asr.Listen ┬─ SpeechStart → NATS vox.vad.speaking.start
-                                  ├─ SpeechEnd   → NATS vox.vad.speaking.stop
-                                  └─ SpeechText   → NATS vox.stt.message
+Mic → audio.Capture → asr.Listen ┬─ SpeechStart → NATS vad.speaking.start
+                                  ├─ SpeechEnd   → NATS vad.speaking.stop
+                                  └─ SpeechText   → NATS stt.message
 ```
 
 - `cmd/vox/main.go` is the only entry point: load config → start NATS → load
@@ -103,8 +103,8 @@ Mic → audio.Capture → asr.Listen ┬─ SpeechStart → NATS vox.vad.speakin
 - `pkg/audio` — PortAudio `Capture` + PCM16LE / WAV codec + the
   Linux-only `SilenceStderr` trick (see Gotchas).
 - `pkg/nats` — embedded NATS server with JetStream. On boot it creates two
-  streams: `VAD` (`vox.vad.>`) and `STT` (`vox.stt.>`). Subjects:
-  `vox.vad.speaking.start`, `vox.vad.speaking.stop`, `vox.stt.message`.
+  streams: `VAD` (`vad.>`) and `STT` (`stt.>`). Subjects:
+  `vad.speaking.start`, `vad.speaking.stop`, `stt.message`.
 - `pkg/config` — config schema + `Load`. `VADConfig.ToTiming()` lives here
   (not in `vad`) deliberately, to keep `config` from importing `vad`.
 

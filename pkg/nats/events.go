@@ -11,9 +11,9 @@ import (
 
 // NATS subject constants.
 const (
-	SubjectVADStart = "vox.vad.speaking.start"
-	SubjectVADStop  = "vox.vad.speaking.stop"
-	SubjectSTTMsg   = "vox.stt.message"
+	SubjectVADStart = "vad.speaking.start"
+	SubjectVADStop  = "vad.speaking.stop"
+	SubjectSTTMsg   = "stt.message"
 )
 
 // VADEvent is published when VAD detects speech start or stop.

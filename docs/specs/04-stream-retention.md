@@ -47,8 +47,8 @@ type NATSConfig struct {
 
    ```go
    streams := []*nats.StreamConfig{
-       {Name: "VAD", Subjects: []string{"vox.vad.>"}, Replicas: 1, MaxAge: vadMaxAge},
-       {Name: "STT", Subjects: []string{"vox.stt.>"}, Replicas: 1, MaxAge: sttMaxAge},
+       {Name: "VAD", Subjects: []string{"vad.>"}, Replicas: 1, MaxAge: vadMaxAge},
+       {Name: "STT", Subjects: []string{"stt.>"}, Replicas: 1, MaxAge: sttMaxAge},
    }
    ```
 
