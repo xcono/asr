@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/xcono/vox/pkg/vad"
+	"github.com/xcono/asr/pkg/vad"
 )
 
 // Config is the top-level configuration for the vox service.

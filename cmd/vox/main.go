@@ -17,11 +17,11 @@ import (
 
 	"github.com/gordonklaus/portaudio"
 
-	"github.com/xcono/vox/pkg/asr"
-	"github.com/xcono/vox/pkg/audio"
-	"github.com/xcono/vox/pkg/config"
-	"github.com/xcono/vox/pkg/nats"
-	"github.com/xcono/vox/pkg/vad"
+	"github.com/xcono/asr/pkg/asr"
+	"github.com/xcono/asr/pkg/audio"
+	"github.com/xcono/asr/pkg/config"
+	"github.com/xcono/asr/pkg/nats"
+	"github.com/xcono/asr/pkg/vad"
 )
 
 func main() {

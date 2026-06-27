@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xcono/vox/pkg/audio"
+	"github.com/xcono/asr/pkg/audio"
 )
 
 // Transcriber posts whole utterances to an OpenAI-compatible STT endpoint.

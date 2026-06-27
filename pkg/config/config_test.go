@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/xcono/vox/pkg/vad"
+	"github.com/xcono/asr/pkg/vad"
 )
 
 func TestLoad_Defaults(t *testing.T) {

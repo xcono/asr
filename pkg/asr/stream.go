@@ -10,7 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/xcono/vox/pkg/audio"
+	"github.com/xcono/asr/pkg/audio"
 )
 
 // Streaming message kinds, mirroring the server's JSON "type" field.

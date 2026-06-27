@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xcono/vox/pkg/vad"
+	"github.com/xcono/asr/pkg/vad"
 )
 
 // Source yields fixed-size windows of 16 kHz mono PCM. *audio.Capture is the mic

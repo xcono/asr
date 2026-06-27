@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xcono/vox/pkg/vad"
+	"github.com/xcono/asr/pkg/vad"
 )
 
 // fakeSource yields a fixed number of dummy windows, then io.EOF.

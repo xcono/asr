@@ -1,4 +1,4 @@
-module github.com/xcono/vox
+module github.com/xcono/asr
 
 go 1.25.0
 
