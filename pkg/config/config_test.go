@@ -38,12 +38,6 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.STT.GigaAM.Model)
 	assert.Empty(t, cfg.STT.ElevenLabs.APIKey)
 	assert.Empty(t, cfg.STT.ElevenLabs.Model)
-
-	// NATS defaults
-	assert.Equal(t, 4222, cfg.NATS.Port)
-	assert.Equal(t, "/tmp/nats", cfg.NATS.StoreDir)
-	assert.Equal(t, "72h", cfg.NATS.VADMaxAge)
-	assert.Equal(t, "72h", cfg.NATS.STTMaxAge)
 }
 
 func TestLoad_FullConfig(t *testing.T) {
@@ -71,12 +65,6 @@ func TestLoad_FullConfig(t *testing.T) {
 				Model:  "eleven_multilingual_v2",
 			},
 		},
-		NATS: NATSConfig{
-			Port:      9090,
-			StoreDir:  "/data/nats",
-			VADMaxAge: "24h",
-			STTMaxAge: "48h",
-		},
 	}
 
 	requireWriteJSON(t, path, input)
@@ -100,12 +88,6 @@ func TestLoad_FullConfig(t *testing.T) {
 	assert.Equal(t, "custom-model", cfg.STT.GigaAM.Model)
 	assert.Equal(t, "sk-abc123", cfg.STT.ElevenLabs.APIKey)
 	assert.Equal(t, "eleven_multilingual_v2", cfg.STT.ElevenLabs.Model)
-
-	// NATS
-	assert.Equal(t, 9090, cfg.NATS.Port)
-	assert.Equal(t, "/data/nats", cfg.NATS.StoreDir)
-	assert.Equal(t, "24h", cfg.NATS.VADMaxAge)
-	assert.Equal(t, "48h", cfg.NATS.STTMaxAge)
 }
 
 func TestLoad_MissingFile(t *testing.T) {
@@ -142,15 +124,15 @@ func TestLoad_EmptyPathDefaults(t *testing.T) {
 	assert.NoError(t, err)
 
 	requireWriteJSON(t, "config.json", map[string]any{
-		"nats": map[string]any{
-			"port": 9999,
+		"stt": map[string]any{
+			"provider": "elevenlabs",
 		},
 	})
 
 	cfg, err := Load("")
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
-	assert.Equal(t, 9999, cfg.NATS.Port)
+	assert.Equal(t, "elevenlabs", cfg.STT.Provider)
 }
 
 func TestToTiming(t *testing.T) {

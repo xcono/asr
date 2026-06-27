@@ -1,11 +1,13 @@
 # asr
 
 Decoupled speech-to-text module (`github.com/xcono/asr`) for the realtime voice
-agent: Silero VAD + transcription behind an importable, NATS-free facade
+agent: Silero VAD + transcription behind an importable facade
 (`stt.New`/`stt.NewWith` → `Events()` / `IsSpeaking()` / `Transcribe()`),
-consumed **in-process** by [`xcono/voices`](../voices). A standalone debug
-binary, `cmd/vox`, wraps the same pipeline and emits VAD + STT events over an
-embedded NATS JetStream — **NATS lives only there**, never on the library path.
+consumed **in-process** by [`xcono/voices`](../voices) over Go channels. A
+standalone debug binary, `cmd/vox`, wraps the same pipeline and logs events to
+stdout. **This module carries no event transport** (high cohesion, low coupling):
+if cross-service propagation is ever needed, the central unit `xcono/voices` owns
+it (a NATS server in its docker stack), not the speech modules.
 
 **Source PoC:** `xcono/voices` — the full voice assistant (VAD → ASR → LLM →
 TTS). This module extracts the VAD + ASR layer; sibling [`xcono/tts`](../tts) is
@@ -49,8 +51,8 @@ before the build if `$(ORT)/lib/libonnxruntime.so` is missing. Override with
 
 Because `vad` is cgo, `make test` (which runs `go test ./...`) also requires a
 working ORT. To run non-cgo package tests in isolation without ORT, target the
-specific packages: e.g. `go test ./pkg/asr/... ./pkg/audio/... ./pkg/config/...
-./pkg/nats/...`.
+specific packages: e.g. `go test ./pkg/asr/... ./pkg/audio/...`. (Note: `config`
+imports `vad` for `Timing`, so it is also cgo-linked.)
 
 ### PortAudio (required for mic capture)
 
@@ -80,14 +82,14 @@ only). See `README.md` for the full table of VAD parameters and their meaning.
 ## Architecture / data flow
 
 ```
-Mic → audio.Capture → asr.Listen ┬─ SpeechStart → NATS vad.speaking.start
-                                  ├─ SpeechEnd   → NATS vad.speaking.stop
-                                  └─ SpeechText   → NATS stt.message
+Mic → audio.Capture → asr.Listen ┬─ SpeechStart → log / channel
+                                  ├─ SpeechEnd   → log / channel
+                                  └─ SpeechText   → log / channel
 ```
 
-- `cmd/vox/main.go` is the only entry point: load config → start NATS → load
-  Silero → init PortAudio → build an `asr.Recognizer` (only `gigaam` switch
-  case exists) → range over `asr.Listen`'s event channel → publish each event.
+- `cmd/vox/main.go` is the only entry point: load config → load Silero → init
+  PortAudio → build an `asr.Recognizer` (only `gigaam` switch case exists) →
+  range over `asr.Listen`'s event channel → log each event. No transport.
 - `asr.Listen` (`pkg/asr/listen.go`) is the pipeline controller and the place
   the four domains meet. It owns the FSM, preroll ring, and utterance buffer,
   and dispatches transcription to a goroutine so a slow recogniser never
@@ -103,9 +105,6 @@ Mic → audio.Capture → asr.Listen ┬─ SpeechStart → NATS vad.speaking.st
   streaming; **not wired into the pipeline**, exists for future streaming STT).
 - `pkg/audio` — PortAudio `Capture` + PCM16LE / WAV codec + the
   Linux-only `SilenceStderr` trick (see Gotchas).
-- `pkg/nats` — embedded NATS server with JetStream. On boot it creates two
-  streams: `VAD` (`vad.>`) and `STT` (`stt.>`). Subjects:
-  `vad.speaking.start`, `vad.speaking.stop`, `stt.message`.
 - `pkg/config` — config schema + `Load`. `VADConfig.ToTiming()` lives here
   (not in `vad`) deliberately, to keep `config` from importing `vad`.
 
@@ -121,13 +120,13 @@ VAD-style consumers), not int16.
 ## Conventions
 
 - Short package names (3–5 letters), one concern per directory: `vad`, `asr`,
-  `audio`, `config`, `nats`. (The original PoC used `bus` for the event layer;
-  this repo renamed it `nats` — follow the real name here.)
+  `audio`, `config`. (The original PoC carried an event-transport package; it was
+  dropped — this module is transport-free, events flow over Go channels only.)
 - One noun per file: `listen.go`, `stream.go`, `batch.go`, `capture.go`. Where
   files form a pipeline, name them so **alphabetical order = process order**.
 - Error wrapping: `fmt.Errorf("context: %w", err)`. Return early, no deep
-  nesting. Package-prefix messages at call sites (e.g. `"nats: publish vad
-  start: %v"`, `"asr: status %d: %s"`).
+  nesting. Package-prefix messages at call sites (e.g. `"vad model: %w"`,
+  `"asr: status %d: %s"`).
 - Doc comments on exported identifiers explain *why*, not *what*. Several
   comments document prior bugs they prevent regressing (FSM leaky counters,
   preroll sizing, overflow tolerance) — preserve that context when editing.
@@ -137,7 +136,7 @@ VAD-style consumers), not int16.
 ## Testing patterns
 
 - Tests live next to the code (`*_test.go` in the same package, white-box).
-- `pkg/nats` and `pkg/asr/batch` use `testify` (`require`/`assert`).
+- `pkg/asr/batch` and `pkg/config` use `testify` (`require`/`assert`).
   `pkg/vad`, `pkg/asr/listen`, `pkg/audio` use plain `t.Fatalf`/`t.Errorf`.
   Match the convention of the package you're editing.
 - VAD/ASR tests avoid the ONNX model and the network via fakes:
@@ -146,9 +145,6 @@ VAD-style consumers), not int16.
   - `fakeSource` yields N dummy windows then `io.EOF`.
   - Batch tests use `httptest.NewServer` to fake the OpenAI-compatible STT
     endpoint; streaming tests upgrade it to a `websocket.Upgrader`.
-- `nats.NewServer(0, t.TempDir())` — port `0` for a random free port,
-  `t.TempDir()` for an isolated JetStream store dir. Use this pattern, not a
-  fixed port, to keep tests parallel-safe.
 - When adding VAD timing-dependent tests, drive counts from the
   `Timing.OnsetWindows()`/`ReleaseWindows()`/`EndOfTurnWindows()` helpers so
   they stay correct if consts change.
@@ -170,10 +166,9 @@ VAD-style consumers), not int16.
   buffer. Every other error stays fatal so a real device failure isn't
   swallowed. `Capture.Overflows()` reports the count; `main` logs it at
   shutdown. Don't "fix" this by propagating overflow.
-- **`asr.Listen` never sets `Event.VoiceFileID`.** The field exists and is
-  plumbed end-to-end (NATS `MessageEvent.voice_file_id`), but the current
-  pipeline leaves it empty. Wire it only if a recording/audio-file-id source
-  is added.
+- **`asr.Listen` never sets `Event.VoiceFileID`.** The field exists on `Event`
+  but the current pipeline leaves it empty. Wire it only if a recording/
+  audio-file-id source is added.
 - **`silero-vad-go` is a fork via `go.mod replace`.** The import path is
   `github.com/streamer45/silero-vad-go`, but `replace` redirects it to
   `github.com/hylarucoder/silero-vad-onnx-go`. Don't "tidy" the replace away.

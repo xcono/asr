@@ -7,10 +7,10 @@ architecture, the resolved decisions, and the remaining work.
 The service includes:
 - silero-go VAD
 - ASR/STT model interface (GigaAM local, ElevenLabs remote)
-- an importable, NATS-free facade (Stream/Batch/IsSpeaking)
-- cmd/vox: a standalone debug binary (embedded NATS lives here ONLY)
+- an importable facade (Stream/Batch/IsSpeaking) — events over Go channels
+- cmd/vox: a standalone debug binary (logs events to stdout; no transport)
 
-Config: config.json — VAD timing, STT provider, NATS (cmd/vox only).
+Config: config.json — VAD timing, STT provider. No event-transport config.
 Dev-ops: avoid Python where possible; GigaAM/Qwen3-ASR run as Python servers
 (no Go equivalent), pointed at via base_url.
 Development: built iteratively by AI coding agents.
@@ -23,7 +23,9 @@ Development: built iteratively by AI coding agents.
       xcono/tts    — TTS "mouth": synthesis client (pure-Go).
       xcono/voices — LLM brain (act, bus, llm) + the audio device.
   - voices imports asr + tts as library deps; streaming flows over Go channels /
-    emit callbacks. NO NATS on the library path (NATS can't stream bytes).
+    emit callbacks. NO event transport in the speech modules at all — if
+    cross-service propagation is ever needed, voices (the central unit) owns a
+    NATS server in its docker stack; the modules stay transport-free.
   - Python ASR servers moved here: llm/giga-asr -> asr/llm/giga3,
     llm/qwen3-asr -> asr/llm/qwen3. TTS server moved to tts/llm/qwen3-tts.
   - The old ./stt copy (module github.com/xcono/stt) was superseded by this repo
@@ -33,8 +35,9 @@ Development: built iteratively by AI coding agents.
   - 2 module repos (asr, tts) + voices. Rationale: per-component focus for
     AI-driven dev, independent versioning, and asr's heavy cgo/ONNX/PortAudio
     deps stay out of the pure-Go tts client.
-  - In-process Go modules, NOT network services. NATS dropped from the library
-    path; it survives only behind cmd/vox (the standalone debug binary).
+  - In-process Go modules, NOT network services. NATS removed entirely (2026-06-27):
+    it was unneeded for high cohesion / low coupling. cmd/vox now logs to stdout.
+    The central unit (voices) is where any future event bus would live.
   - voices knows ONE rule about STT: when VAD becomes TRUE, interrupt the TTS
     that is currently speaking (event-driven via SpeechStart, or IsSpeaking()).
   - Audio contracts (fixed): STT/VAD = 16 kHz/16-bit/LE/mono; TTS = 24 kHz/mono/int16 LE.
@@ -45,7 +48,9 @@ Development: built iteratively by AI coding agents.
     also has local `replace` directives so plain `go build` works.
 
 3. Status
-  [x] asr facade (stt.go) — New/NewWith, Events/Transcribe/IsSpeaking. cmd/vox keeps NATS.
+  [x] asr facade (stt.go) — New/NewWith, Events/Transcribe/IsSpeaking.
+  [x] NATS removed entirely (pkg/nats deleted, config.NATS gone, deps tidied);
+      cmd/vox logs events to stdout. Module is transport-free.
   [x] tts module — Provider (Client/ElevenLabs/Fallback) + Service facade + cmd/say.
   [x] voices wired: cmd/act + run/* + cmd/{say,loopback,tts-record} on the modules;
       voices/pkg/{asr,vad,tts} deleted (voices = brain + audio device only).
@@ -54,7 +59,7 @@ Development: built iteratively by AI coding agents.
       was replaced with the real faster-qwen3-tts server (openai_server.py).
   [x] tts standalone debug binary (cmd/say, WAV out) + tts docker-compose.
   [x] voices docker-compose: default network named `voices`; tts/asr composes join it.
-  [x] Refreshed asr README.md / AGENTS.md to a facade-first framing (xcono/asr, NATS only in cmd/vox).
+  [x] Refreshed asr README.md / AGENTS.md to a facade-first, transport-free framing.
   [x] Removed the duplicated voices/llm/{giga-asr,qwen3-asr,qwen3-tts}; voices/llm keeps only qwen3-llm.
       voices compose now builds stt/tts from ../asr and ../tts (single source); all composes validate.
   [x] asr docker-compose.yaml (GigaAM stt:8008), parity with tts; both join the `voices` network.

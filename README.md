@@ -1,10 +1,13 @@
 # asr
 
 Decoupled **speech-to-text "ears"** for the realtime voice agent: Silero VAD +
-transcription, exposed as an importable, NATS-free Go module
-(`github.com/xcono/asr`) consumed in-process by [`xcono/voices`](../voices). A
-standalone debug binary, `cmd/vox`, wraps the same pipeline and additionally
-emits events over an embedded NATS JetStream.
+transcription, exposed as an importable Go module (`github.com/xcono/asr`)
+consumed in-process by [`xcono/voices`](../voices) over Go channels. A standalone
+debug binary, `cmd/vox`, wraps the same pipeline and logs events to stdout.
+
+This module carries **no event transport** — high cohesion, low coupling. If
+cross-service event propagation is ever needed, the central unit (`xcono/voices`)
+owns it (a NATS server in its docker stack); the speech modules stay transport-free.
 
 ## Facade (importable — the path voices uses)
 
@@ -17,18 +20,17 @@ ok := svc.IsSpeaking()                 // VAD TRUE/FALSE (barge-in signal)
 text, err := svc.Transcribe(ctx, pcm)  // Batch one-shot (16 kHz mono PCM)
 ```
 
-The facade is NATS-free; nothing here starts a server. NATS lives only behind
-`cmd/vox` (below).
+Nothing here starts a server; events are delivered over Go channels only.
 
 ## Pipeline (the cmd/vox debug path)
 
 ```
-Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → NATS "vad.speaking.start"
-                                    ├─ SpeechEnd   → NATS "vad.speaking.stop"
-                                    └─ SpeechText  → NATS "stt.message"
+Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
+                                    ├─ SpeechEnd   → log
+                                    └─ SpeechText  → log
 ```
 
-`asr.Listen` runs the full pipeline: audio capture → Silero VAD (FSM + preroll) → segment collection → batch transcription. The facade returns these as a channel of events; `cmd/vox` additionally publishes them to NATS JetStream for any subscriber to consume.
+`asr.Listen` runs the full pipeline: audio capture → Silero VAD (FSM + preroll) → segment collection → batch transcription. It returns these as a channel of events; `cmd/vox` logs them to stdout. In-process consumers (e.g. `xcono/voices`) range over the same channel via the facade.
 
 ## Config
 
@@ -49,10 +51,6 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → NATS "vad.speaki
     "provider": "gigaam",
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
     "elevenlabs": { "api_key": "", "model": "" }
-  },
-  "nats": {
-    "port": 4222,
-    "store_dir": "/tmp/nats"
   }
 }
 ```
@@ -72,11 +70,6 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → NATS "vad.speaki
 
 - **gigaam** — local batch STT via an OpenAI-compatible HTTP API (`/v1/audio/transcriptions`). Requires a separate Python server running at `base_url`.
 - **elevenlabs** — remote STT (not yet wired in code, config placeholder only).
-
-### NATS settings
-
-- `port` — embedded server listen port (default 4222)
-- `store_dir` — JetStream persistence directory
 
 ## VAD
 
@@ -106,15 +99,16 @@ Returns a channel of `Event` (`SpeechStart`, `SpeechEnd`, `SpeechText` with time
 
 ## Events
 
-Three NATS subjects, two JetStream streams:
+`asr.Listen` (and the facade's `Events()`) yields a channel of `Event`:
 
-| Subject | Stream | Event | Fields |
-|---------|--------|-------|--------|
-| `vad.speaking.start` | VAD | `VADEvent` | `timestamp` |
-| `vad.speaking.stop` | VAD | `VADEvent` | `timestamp` |
-| `stt.message` | STT | `MessageEvent` | `timestamp`, `text`, `voice_file_id` |
+| Kind | Fields |
+|------|--------|
+| `SpeechStart` | `Timestamp` |
+| `SpeechEnd` | `Timestamp` |
+| `SpeechText` | `Timestamp`, `Text`, `VoiceFileID` |
+| `SpeechError` | `Err` |
 
-Streams use the `vad.>` and `stt.>` wildcard subjects, so any future subjects under those prefixes are automatically captured.
+Consumers range over the channel in-process. There is no network event bus here.
 
 ## Infrastructure
 
@@ -155,59 +149,18 @@ make deps-portaudio      # or:  apt install portaudio19-dev
 
 ### GigaAM STT server (external dependency)
 
-GigaAM requires a Python server exposing an OpenAI-compatible `/v1/audio/transcriptions` endpoint. This is an external process, not embedded Go code. Point `stt.gigaam.base_url` in config at it.
+GigaAM requires a Python server exposing an OpenAI-compatible `/v1/audio/transcriptions` endpoint. This is an external process, not embedded Go code. Point `stt.gigaam.base_url` in config at it. A `docker-compose.yaml` ships the GigaAM server; `xcono/voices` `include:`s it.
 
-### NATS server
+### Consuming ASR from another Go process
 
-Embedded in-process — no separate binary needed. The server starts with JetStream enabled and creates the `VAD` and `STT` streams on boot. Data persists to `nats.store_dir`.
-
-### NATS client example (Go)
+Import the facade and range over `Events()` — no broker, no subjects:
 
 ```go
-package main
+import "github.com/xcono/asr" // package stt
 
-import (
-    "fmt"
-    "log"
-    "time"
-
-    "github.com/nats-io/nats.go"
-)
-
-func main() {
-    nc, err := nats.Connect("nats://localhost:4222")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer nc.Close()
-
-    js, err := nc.JetStream()
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Subscribe to transcription messages
-    sub, err := js.Subscribe("stt.message", func(msg *nats.Msg) {
-        fmt.Printf("[%s] %s\n", msg.Subject, string(msg.Data))
-        msg.Ack()
-    }, nats.DeliverAll())
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer sub.Unsubscribe()
-
-    // Or: subscribe to VAD events
-    sub2, err := js.Subscribe("vad.>", func(msg *nats.Msg) {
-        fmt.Printf("[%s] %s\n", msg.Subject, string(msg.Data))
-        msg.Ack()
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer sub2.Unsubscribe()
-
-    // Keep running
-    select {}
+svc := stt.NewWith(src, det, rec, timing) // caller owns the mic/model lifecycle
+for ev := range svc.Events() {
+    // ev.Kind: SpeechStart | SpeechEnd | SpeechText | SpeechError
 }
 ```
 

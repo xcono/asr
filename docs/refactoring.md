@@ -1,5 +1,11 @@
 # vox Refactoring Plan
 
+> **HISTORICAL (2026-06-27).** NATS was removed from this module entirely — it is
+> now transport-free (events over Go channels; `cmd/vox` logs to stdout). **Section
+> B (NATS/HTTP production best practices) and its specs `03-jetstream-publish.md` /
+> `04-stream-retention.md` are obsolete** — kept only as a record of the prior
+> design. Section A (correctness) items remain valid where they touch `vad`/`asr`.
+
 Outcome of an automated review (context7 NATS docs + `go vet`/`go build`/`go test`
 static analysis). Items are ordered by priority: correctness first, then
 production hardening, then simplification. Each item maps to a spec in

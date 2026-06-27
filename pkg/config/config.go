@@ -10,9 +10,8 @@ import (
 
 // Config is the top-level configuration for the vox service.
 type Config struct {
-	VAD  VADConfig  `json:"vad"`
-	STT  STTConfig  `json:"stt"`
-	NATS NATSConfig `json:"nats"`
+	VAD VADConfig `json:"vad"`
+	STT STTConfig `json:"stt"`
 }
 
 // VADConfig holds Silero VAD timing parameters.
@@ -43,14 +42,6 @@ type GigaAMConfig struct {
 type ElevenLabsConfig struct {
 	APIKey string `json:"api_key"`
 	Model  string `json:"model"`
-}
-
-// NATSConfig holds the embedded NATS server configuration.
-type NATSConfig struct {
-	Port      int    `json:"port"`        // Client port (default 4222)
-	StoreDir  string `json:"store_dir"`   // Jetstream storage directory (default "/tmp/nats")
-	VADMaxAge string `json:"vad_max_age"` // MaxAge for the VAD stream (default "72h"); 0 disables
-	STTMaxAge string `json:"stt_max_age"` // MaxAge for the STT stream (default "72h"); 0 disables
 }
 
 // Load reads config.json from the given path and unmarshals it.
@@ -99,18 +90,6 @@ func (c *Config) setDefaults() {
 	}
 	if c.STT.GigaAM.BaseURL == "" {
 		c.STT.GigaAM.BaseURL = "http://localhost:8008/v1"
-	}
-	if c.NATS.Port == 0 {
-		c.NATS.Port = 4222
-	}
-	if c.NATS.StoreDir == "" {
-		c.NATS.StoreDir = "/tmp/nats"
-	}
-	if c.NATS.VADMaxAge == "" {
-		c.NATS.VADMaxAge = "72h"
-	}
-	if c.NATS.STTMaxAge == "" {
-		c.NATS.STTMaxAge = "72h"
 	}
 }
 

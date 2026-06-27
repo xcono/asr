@@ -1,8 +1,9 @@
-// Command vox is the standalone ASR/STT service for a realtime voice agent.
-// It captures the mic, detects speech with Silero VAD, transcribes each turn
-// via a configured STT provider, and publishes events over an embedded NATS
-// Jetstream server. Clients subscribe to NATS subjects to consume VAD and
-// transcription events.
+// Command vox is the standalone ASR/STT debug loop. It captures the mic, detects
+// speech with Silero VAD, transcribes each turn via a configured STT provider, and
+// logs the VAD/transcription events to stdout. It carries no event transport: the
+// importable facade (stt.New / stt.NewWith) is how other processes consume ASR.
+// If cross-service event propagation is ever needed, the central unit (xcono/voices)
+// owns that — a NATS server in its docker stack — not this module.
 package main
 
 import (
@@ -20,7 +21,6 @@ import (
 	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/audio"
 	"github.com/xcono/asr/pkg/config"
-	"github.com/xcono/asr/pkg/nats"
 	"github.com/xcono/asr/pkg/vad"
 )
 
@@ -39,22 +39,6 @@ func main() {
 }
 
 func run(cfg *config.Config) error {
-	// --- NATS ---
-	vadMaxAge, err := parseMaxAge(cfg.NATS.VADMaxAge, 72*time.Hour)
-	if err != nil {
-		return fmt.Errorf("nats vad_max_age: %w", err)
-	}
-	sttMaxAge, err := parseMaxAge(cfg.NATS.STTMaxAge, 72*time.Hour)
-	if err != nil {
-		return fmt.Errorf("nats stt_max_age: %w", err)
-	}
-	ns, err := nats.NewServer(cfg.NATS.Port, cfg.NATS.StoreDir, vadMaxAge, sttMaxAge)
-	if err != nil {
-		return fmt.Errorf("nats: %w", err)
-	}
-	defer ns.Close()
-	log.Printf("nats: listening on %s", ns.Conn().ConnectedUrl())
-
 	// --- VAD model ---
 	model, err := vad.NewModel(cfg.VAD.ModelPath)
 	if err != nil {
@@ -119,19 +103,10 @@ func run(cfg *config.Config) error {
 		switch ev.Kind {
 		case asr.SpeechStart:
 			log.Printf("vad: speaking started at %s", ev.Timestamp.Format(time.RFC3339Nano))
-			if err := ns.PublishVADStart(ev.Timestamp); err != nil {
-				log.Printf("nats: publish vad start: %v", err)
-			}
 		case asr.SpeechEnd:
 			log.Printf("vad: speaking stopped at %s", ev.Timestamp.Format(time.RFC3339Nano))
-			if err := ns.PublishVADStop(ev.Timestamp); err != nil {
-				log.Printf("nats: publish vad stop: %v", err)
-			}
 		case asr.SpeechText:
 			log.Printf("stt: %q (voice_file_id=%s)", ev.Text, ev.VoiceFileID)
-			if err := ns.PublishMessage(ev.Timestamp, ev.Text, ev.VoiceFileID); err != nil {
-				log.Printf("nats: publish message: %v", err)
-			}
 		case asr.SpeechError:
 			log.Printf("asr: pipeline error: %v", ev.Err)
 		}
@@ -141,19 +116,4 @@ func run(cfg *config.Config) error {
 		log.Printf("note: tolerated %d mic input overflow(s)", n)
 	}
 	return nil
-}
-
-// parseMaxAge parses a duration string from config, returning the fallback
-// when the input is empty (the config layer default is "72h", so the fallback
-// is belt-and-braces for callers that bypass config defaults). A non-empty
-// invalid string is an error.
-func parseMaxAge(s string, fallback time.Duration) (time.Duration, error) {
-	if s == "" {
-		return fallback, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("parse %q: %w", s, err)
-	}
-	return d, nil
 }
