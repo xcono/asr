@@ -36,9 +36,12 @@ its `testfiles/`), falling back to a `wget` from `snakers4/silero-vad`
 `SILERO_VERSION` (default `v5.1.2`). Override `ORT_VERSION`, `SILERO_VERSION`,
 `ORT`, `MODEL_PATH` on the make command line to retarget.
 
-The binary takes one flag: `-config <path>` (default `config.json`). Config is
-read from the working directory by default — run from the repo root so
-`pkg/vad/silero_vad.onnx` (the default `model_path`) resolves.
+The binary takes two flags: `-config <path>` (default `config.json`) and
+`-vad-debug` (off by default — tees each window's Silero speech probability to
+stderr as a meter, to diagnose missed onsets; its gate ticks track the
+`config.json` VAD timing). Config is read from the working directory by default —
+run from the repo root so `pkg/vad/silero_vad.onnx` (the default `model_path`)
+resolves.
 
 ### ONNX Runtime (required to build/run)
 
@@ -90,6 +93,9 @@ Mic → audio.Capture → asr.Listen ┬─ SpeechStart → log / channel
 - `cmd/vox/main.go` is the only entry point: load config → load Silero → init
   PortAudio → build an `asr.Recognizer` (only `gigaam` switch case exists) →
   range over `asr.Listen`'s event channel → log each event. No transport.
+  `cmd/vox/vaddebug.go` is a helper in the same package: under `-vad-debug` it
+  wraps the `Detector` to tee per-window speech probabilities as a meter
+  (behaviour-neutral — it returns the inner result unchanged).
 - `asr.Listen` (`pkg/asr/listen.go`) is the pipeline controller and the place
   the four domains meet. It owns the FSM, preroll ring, and utterance buffer,
   and dispatches transcription to a goroutine so a slow recogniser never
