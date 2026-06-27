@@ -1,0 +1,53 @@
+# Standalone ASR service for the xcono/asr module: the GigaAM v3 Python server
+# (OpenAI-compatible batch transcription on :8008, open SOTA Russian ASR).
+#
+# Decoupled from xcono/voices but joins the same `voices` network and reuses the
+# shared HF weight cache, so the orchestrator reaches it as `stt:8008` when both
+# stacks are up — and it still runs on its own for ASR debugging.
+#
+#   docker compose up -d            # build + run the ASR server
+#   make run                        # then drive the VAD→ASR loop against it (cmd/vox)
+#
+# For the MULTILINGUAL / streaming Qwen3-ASR server instead, build ./llm/qwen3.
+# DO NOT build/up in a sandbox — needs the GPU box + NVIDIA Container Toolkit.
+
+name: asr
+
+services:
+  stt:
+    build:
+      context: ./llm/giga3          # GigaAM batch server (asr_server.py)
+    image: xcono-asr-giga
+    ports:
+      - "8008:8008"
+    environment:
+      GIGAAM_MODEL: ${GIGAAM_MODEL:-v3_rnnt}     # v3_e2e_rnnt for punctuation + normalization
+      GIGAAM_DEVICE: cuda:0
+      GIGAAM_DOWNLOAD_ROOT: /root/.cache/huggingface/gigaam
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${ASR_GPU:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    restart: unless-stopped
+
+# Shared with the xcono/voices stack so weights are downloaded once.
+volumes:
+  hf-cache:
+    name: llms_hf-cache
+    external: true
+
+# Literal `voices` network so this service and the voices orchestrator co-reside.
+networks:
+  default:
+    name: voices

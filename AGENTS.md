@@ -1,14 +1,15 @@
-# vox
+# asr
 
-Standalone ASR/STT Go service for a realtime voice agent. Captures the mic,
-detects speech with Silero VAD, transcribes each turn via a configured STT
-provider, and publishes VAD + transcription events over an embedded NATS
-JetStream server. Clients subscribe to NATS subjects to consume events.
+Decoupled speech-to-text module (`github.com/xcono/asr`) for the realtime voice
+agent: Silero VAD + transcription behind an importable, NATS-free facade
+(`stt.New`/`stt.NewWith` → `Events()` / `IsSpeaking()` / `Transcribe()`),
+consumed **in-process** by [`xcono/voices`](../voices). A standalone debug
+binary, `cmd/vox`, wraps the same pipeline and emits VAD + STT events over an
+embedded NATS JetStream — **NATS lives only there**, never on the library path.
 
-**Source PoC:** `/home/xcono/src/github.com/xcono/voices` — the full voice
-assistant (VAD → ASR → LLM → TTS). This project extracts just the VAD + ASR +
-event-bus layer and adds NATS persistence. Do not copy TTS, LLM, voiceq, act,
-or audio-playback code from the PoC.
+**Source PoC:** `xcono/voices` — the full voice assistant (VAD → ASR → LLM →
+TTS). This module extracts the VAD + ASR layer; sibling [`xcono/tts`](../tts) is
+the "mouth". Do not copy TTS, LLM, voiceq, act, or audio-playback code here.
 
 Out of scope: LLM, TTS, playback, orchestrator turn loop, Bluetooth headset.
 

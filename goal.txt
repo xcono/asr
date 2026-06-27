@@ -54,7 +54,11 @@ Development: built iteratively by AI coding agents.
       was replaced with the real faster-qwen3-tts server (openai_server.py).
   [x] tts standalone debug binary (cmd/say, WAV out) + tts docker-compose.
   [x] voices docker-compose: default network named `voices`; tts/asr composes join it.
-  [ ] Refresh per-repo README.md / AGENTS.md where still stale (asr cmd/vox docs say "vox").
-  [ ] Optional: remove the now-duplicated voices/llm/{giga-asr,qwen3-asr,qwen3-tts}
-      (they live in asr/tts now); voices keeps only llm/qwen3-llm.
-  [ ] Optional: give asr its own docker-compose (parity with tts) for the Python ASR servers.
+  [x] Refreshed asr README.md / AGENTS.md to a facade-first framing (xcono/asr, NATS only in cmd/vox).
+  [x] Removed the duplicated voices/llm/{giga-asr,qwen3-asr,qwen3-tts}; voices/llm keeps only qwen3-llm.
+      voices compose now builds stt/tts from ../asr and ../tts (single source); all composes validate.
+  [x] asr docker-compose.yaml (GigaAM stt:8008), parity with tts; both join the `voices` network.
+
+Decoupling complete. voices is a focused LLM codebase consuming asr + tts as
+in-process Go modules; each module is standalone-runnable with its own compose +
+debug binary. All four compose configs validate (docker compose config).

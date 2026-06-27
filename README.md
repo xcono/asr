@@ -1,16 +1,34 @@
-# vox
+# asr
 
-Standalone ASR/STT Go service for a realtime voice agent. Runs VAD + transcription and emits events over an embedded NATS JetStream.
+Decoupled **speech-to-text "ears"** for the realtime voice agent: Silero VAD +
+transcription, exposed as an importable, NATS-free Go module
+(`github.com/xcono/asr`) consumed in-process by [`xcono/voices`](../voices). A
+standalone debug binary, `cmd/vox`, wraps the same pipeline and additionally
+emits events over an embedded NATS JetStream.
 
-## Architecture
+## Facade (importable — the path voices uses)
+
+```go
+svc, err := stt.New(cfg)               // owns the mic + Silero model
+svc := stt.NewWith(src, det, rec, t)   // or inject components (voices owns the device)
+
+for ev := range svc.Events() { ... }   // Stream: SpeechStart / SpeechEnd / SpeechText
+ok := svc.IsSpeaking()                 // VAD TRUE/FALSE (barge-in signal)
+text, err := svc.Transcribe(ctx, pcm)  // Batch one-shot (16 kHz mono PCM)
+```
+
+The facade is NATS-free; nothing here starts a server. NATS lives only behind
+`cmd/vox` (below).
+
+## Pipeline (the cmd/vox debug path)
 
 ```
 Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → NATS "vad.speaking.start"
                                     ├─ SpeechEnd   → NATS "vad.speaking.stop"
-                                    └─ SpeechText → NATS "stt.message"
+                                    └─ SpeechText  → NATS "stt.message"
 ```
 
-`asr.Listen` runs the full pipeline: audio capture → Silero VAD (FSM + preroll) → segment collection → batch transcription. Events are published to NATS JetStream for any subscriber to consume.
+`asr.Listen` runs the full pipeline: audio capture → Silero VAD (FSM + preroll) → segment collection → batch transcription. The facade returns these as a channel of events; `cmd/vox` additionally publishes them to NATS JetStream for any subscriber to consume.
 
 ## Config
 
