@@ -26,7 +26,6 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to config.json")
-	vadDebug := flag.Bool("vad-debug", false, "print each window's Silero speech probability to stderr (diagnose missed onsets); gate ticks track config.json timing")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -34,12 +33,12 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	if err := run(cfg, *vadDebug); err != nil {
+	if err := run(cfg); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(cfg *config.Config, vadDebug bool) error {
+func run(cfg *config.Config) error {
 	// --- VAD model ---
 	model, err := vad.NewModel(cfg.VAD.ModelPath)
 	if err != nil {
@@ -75,21 +74,20 @@ func run(cfg *config.Config, vadDebug bool) error {
 		restore()
 	}
 
-	// --- STT recognizer ---
+	// --- ASR recognizer ---
 	var rec asr.Recognizer
-	switch cfg.STT.Provider {
+	switch cfg.ASR.Provider {
 	case "gigaam":
-		rec = &asr.Transcriber{BaseURL: cfg.STT.GigaAM.BaseURL, Model: cfg.STT.GigaAM.Model}
+		rec = &asr.Transcriber{BaseURL: cfg.ASR.GigaAM.BaseURL, Model: cfg.ASR.GigaAM.Model}
 	default:
-		return fmt.Errorf("unknown stt provider: %s", cfg.STT.Provider)
+		return fmt.Errorf("unknown asr provider: %s", cfg.ASR.Provider)
 	}
 
-	// asr.Listen takes the Detector interface; wrap the model to tee each
-	// window's Silero probability to stderr when -vad-debug is set (diagnoses
-	// missed onsets). The meter draws its gate ticks from timing, so they track
-	// whatever thresholds config.json sets.
+	// asr.Listen takes the Detector interface; under "vad.debug" wrap the model to
+	// tee each window's Silero probability to stderr (diagnoses missed onsets). The
+	// meter draws its gate ticks from timing, so they track the configured thresholds.
 	var det asr.Detector = model
-	if vadDebug {
+	if cfg.VAD.Debug {
 		det = debugDetector{inner: model, w: os.Stderr, timing: timing}
 	}
 
@@ -106,7 +104,7 @@ func run(cfg *config.Config, vadDebug bool) error {
 	}()
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
-	fmt.Printf("STT: %s (%s)\n", cfg.STT.Provider, cfg.STT.GigaAM.BaseURL)
+	fmt.Printf("ASR: %s (%s)\n", cfg.ASR.Provider, cfg.ASR.GigaAM.BaseURL)
 
 	events := asr.Listen(ctx, mic, det, rec, timing)
 	for ev := range events {

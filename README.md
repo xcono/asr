@@ -45,9 +45,10 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
     "barge_in_ms": 64,
     "release_ms": 700,
     "end_of_turn_ms": 800,
-    "preroll_ms": 300
+    "preroll_ms": 300,
+    "debug": false
   },
-  "stt": {
+  "asr": {
     "provider": "gigaam",
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
     "elevenlabs": { "api_key": "", "model": "" }
@@ -151,7 +152,7 @@ make deps-portaudio      # or:  apt install portaudio19-dev
 
 The STT model runs as a Python server exposing an OpenAI-compatible
 `/v1/audio/transcriptions` endpoint on `:8008` — an external process, not embedded Go
-code. Point `stt.gigaam.base_url` in config at it. Two **interchangeable** backends ship
+code. Point `asr.gigaam.base_url` in config at it. Two **interchangeable** backends ship
 here as standalone compose files (each a complete `stt:8008` stack on the `voices` network,
 reusing the `llms_hf-cache` volume) — pick exactly one:
 

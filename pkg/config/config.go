@@ -8,10 +8,13 @@ import (
 	"github.com/xcono/asr/pkg/vad"
 )
 
-// Config is the top-level configuration for the vox service.
+// Config is the top-level configuration for the asr (vox) service. The two
+// sections are namespaced by name ("vad", "asr") so they are byte-identical
+// whether this module is configured standalone or merged into the xcono/voices
+// config, which composes the same sections.
 type Config struct {
 	VAD VADConfig `json:"vad"`
-	STT STTConfig `json:"stt"`
+	ASR ASRConfig `json:"asr"`
 }
 
 // VADConfig holds Silero VAD timing parameters.
@@ -23,10 +26,11 @@ type VADConfig struct {
 	ReleaseMs   int     `json:"release_ms"`     // Silence evidence for offset (default 700)
 	EndOfTurnMs int     `json:"end_of_turn_ms"` // Continuous silence for streaming turn-end (default 800)
 	PrerollMs   int     `json:"preroll_ms"`     // Lead-in audio before confirmed onset (default 300)
+	Debug       bool    `json:"debug"`          // Tee per-window Silero probability to stderr (onset diagnostics)
 }
 
-// STTConfig holds the speech-to-text provider configuration.
-type STTConfig struct {
+// ASRConfig holds the speech-to-text provider configuration.
+type ASRConfig struct {
 	Provider   string           `json:"provider"` // "gigaam" or "elevenlabs"
 	GigaAM     GigaAMConfig     `json:"gigaam"`
 	ElevenLabs ElevenLabsConfig `json:"elevenlabs"`
@@ -85,11 +89,11 @@ func (c *Config) setDefaults() {
 	if c.VAD.PrerollMs == 0 {
 		c.VAD.PrerollMs = 300
 	}
-	if c.STT.Provider == "" {
-		c.STT.Provider = "gigaam"
+	if c.ASR.Provider == "" {
+		c.ASR.Provider = "gigaam"
 	}
-	if c.STT.GigaAM.BaseURL == "" {
-		c.STT.GigaAM.BaseURL = "http://localhost:8008/v1"
+	if c.ASR.GigaAM.BaseURL == "" {
+		c.ASR.GigaAM.BaseURL = "http://localhost:8008/v1"
 	}
 }
 

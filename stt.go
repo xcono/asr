@@ -68,7 +68,7 @@ type Service struct {
 // which are process-global. Run at most one New-built Service per process. A
 // consumer that already owns the audio device should use NewWith instead.
 func New(cfg *config.Config) (*Service, error) {
-	rec, err := recognizer(cfg.STT)
+	rec, err := recognizer(cfg.ASR)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func (s *Service) Close() error {
 // recognizer builds the STT provider from config. Mirrors cmd/vox: only
 // "gigaam" is wired today; "elevenlabs" is config-only until a Recognizer
 // implementation exists.
-func recognizer(c config.STTConfig) (asr.Recognizer, error) {
+func recognizer(c config.ASRConfig) (asr.Recognizer, error) {
 	switch c.Provider {
 	case "gigaam":
 		return &asr.Transcriber{BaseURL: c.GigaAM.BaseURL, Model: c.GigaAM.Model}, nil
