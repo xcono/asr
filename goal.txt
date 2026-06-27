@@ -1,53 +1,60 @@
-The project is a standalone ASR / STT golang service responsible for user input for realtime voice agent.
+xcono/asr — standalone ASR/STT module for the realtime voice agent.
 
-The service includes: 
-- silero-go vad
-- ASR/STT model interface (gigaAM local, eleven labs remote),
-- embedded NATS Jetstream used for persisting events and add the ability to subscribe.
+This is the "ears" of a voice pipeline that was decoupled out of xcono/voices
+into three Go modules. This file is the canonical record of that decoupling: the
+architecture, the resolved decisions, and the remaining work.
 
-Events:
-- VAD: StartSpeaking, StopSpeaking
-- STT: Message (timestamp, text, + voice file id)
+The service includes:
+- silero-go VAD
+- ASR/STT model interface (GigaAM local, ElevenLabs remote)
+- an importable, NATS-free facade (Stream/Batch/IsSpeaking)
+- cmd/vox: a standalone debug binary (embedded NATS lives here ONLY)
 
-Codebase:
-The service codebase is already written and tested.
-The code components are implemented in the `/home/xcono/src/github.com/xcono/voices` (copy code from there to this project).
+Config: config.json — VAD timing, STT provider, NATS (cmd/vox only).
+Dev-ops: avoid Python where possible; GigaAM/Qwen3-ASR run as Python servers
+(no Go equivalent), pointed at via base_url.
+Development: built iteratively by AI coding agents.
 
+# Decoupling
 
-Config:
-The service reads config.json to get info about:
-- VAD barge-in/release delay durations
-- STT provider config (JSON structure is predefined based on arguments required to run a SST model)
-- NATS settings
+1. Facts
+  - The voice pipeline is split into three Go modules, consumed in-process:
+      xcono/asr    — STT "ears": VAD + transcribe (cgo/ONNX). THIS repo.
+      xcono/tts    — TTS "mouth": synthesis client (pure-Go).
+      xcono/voices — LLM brain (act, bus, llm) + the audio device.
+  - voices imports asr + tts as library deps; streaming flows over Go channels /
+    emit callbacks. NO NATS on the library path (NATS can't stream bytes).
+  - Python ASR servers moved here: llm/giga-asr -> asr/llm/giga3,
+    llm/qwen3-asr -> asr/llm/qwen3. TTS server moved to tts/llm/qwen3-tts.
+  - The old ./stt copy (module github.com/xcono/stt) was superseded by this repo
+    (github.com/xcono/asr) and deleted; this repo carries its full history.
 
-Dev-ops:
-Our goal is to avoid python in the codebase and prefer golang if possible, but it looks like GigaAM runs via python.
+2. Resolved decisions
+  - 2 module repos (asr, tts) + voices. Rationale: per-component focus for
+    AI-driven dev, independent versioning, and asr's heavy cgo/ONNX/PortAudio
+    deps stay out of the pure-Go tts client.
+  - In-process Go modules, NOT network services. NATS dropped from the library
+    path; it survives only behind cmd/vox (the standalone debug binary).
+  - voices knows ONE rule about STT: when VAD becomes TRUE, interrupt the TTS
+    that is currently speaking (event-driven via SpeechStart, or IsSpeaking()).
+  - Audio contracts (fixed): STT/VAD = 16 kHz/16-bit/LE/mono; TTS = 24 kHz/mono/int16 LE.
+  - asr facade: Events() (Stream), Transcribe() (Batch), IsSpeaking() (atomic bool).
+  - tts facade: Stream (SynthesizeStream), Batch (Synthesize), Status (ready/processing/speaking).
+  - Shared pkg/audio is COPIED into each repo (no shared module yet).
+  - go.work at the xcono/ parent (use ./asr ./tts ./voices) for local dev; voices
+    also has local `replace` directives so plain `go build` works.
 
-Development:
-The project is developed by AI coding agents iteratively and incrementally.
-
-
-
-1. Fact - this code moved from the `../voices`:
-  - Current repo is a result of decoupling the `../voices` project.
-  - We have moved the "ears" part - ASR, STT system with VAD in this folder `./stt`.
-  - The code was refactored after moving: config instead of flags, embeded NATS server, VAD settings tunning.
-  - The whole `../voices` project will be decoupled onto `stt`, `llm` and `tts` repositories.
-  - the NATS server is embeded in this golang app and allows to subscribe for listening the STT/VAD service events.
-  - the `../voices` repo will hold `llm` central logic part, it listens STT and sends streams to the TTS (or interrupts the TTS if an user is speaking)
-
- 2. Requirements
-  - the `./stt` repo has branches named `master-*`, where `*` is ASR/STT model. The default branch is `master-giga` - russian ASR.\
-  - the branch `master` has codebase without docker implementation to avoid collision working with the .worktrees\
-
- 3. Tasks STT
-  - rename `../voices/docker-compose.yaml` network to `voices`
-  - create NATS server as a `docker-compose` service in the `../voices/docker-compose.yaml`. Name the service - `nats`
-  - the project should use NATS server from config instead of the embedded (could be kept in the _tests environment if currently used in the tests)
-  - the STT events processing should be placed in the `./voices/run` package and wired to the loop/turn of the `llm` part of the project
-  - the current `sst` repo could be used as a standalone app OR as a library
-
- 4. Tasks TTS
-  - create `../tts` folder
-  - init repo in the `../tts`
-  - write golang app/module implementing a TTS service (events listened: `vad.speaking.stop` on VAD speacking state OR `speaking` with text payload)
+3. Status
+  [x] asr facade (stt.go) — New/NewWith, Events/Transcribe/IsSpeaking. cmd/vox keeps NATS.
+  [x] tts module — Provider (Client/ElevenLabs/Fallback) + Service facade + cmd/say.
+  [x] voices wired: cmd/act + run/* + cmd/{say,loopback,tts-record} on the modules;
+      voices/pkg/{asr,vad,tts} deleted (voices = brain + audio device only).
+  [x] go.work + voices go.mod require+replace for asr & tts.
+  [x] Python server moves committed; the mis-copied tts/llm/qwen3-tts ASR payload
+      was replaced with the real faster-qwen3-tts server (openai_server.py).
+  [x] tts standalone debug binary (cmd/say, WAV out) + tts docker-compose.
+  [x] voices docker-compose: default network named `voices`; tts/asr composes join it.
+  [ ] Refresh per-repo README.md / AGENTS.md where still stale (asr cmd/vox docs say "vox").
+  [ ] Optional: remove the now-duplicated voices/llm/{giga-asr,qwen3-asr,qwen3-tts}
+      (they live in asr/tts now); voices keeps only llm/qwen3-llm.
+  [ ] Optional: give asr its own docker-compose (parity with tts) for the Python ASR servers.
