@@ -14,7 +14,7 @@ differs. This doc is the source of truth for *which* model runs, *why*, and *how
 
 - **GigaAM v3 (`v3_rnnt`)** — open SOTA Russian ASR (SberDevices, MIT, Conformer ~240M).
 - **Russian-only** and **batch-only.** No streaming, no English. For either, run the Qwen3-ASR
-  overlay (`docker-compose.stream.yaml`).
+  backend instead (`docker.qwen.yaml`, `make up-qwen`).
 - **No Hugging Face token** — weights stream from the Sber CDN on first request.
 - **Default run:** `make up` (builds + starts `stt`), then `make run` (VAD→ASR) or `make act`
   (full turn loop). `GIGAAM_MODEL=v3_e2e_rnnt make up` for punctuation + normalization.
@@ -170,7 +170,7 @@ The tests inject a fake model and monkeypatch the torch path, so they assert the
 GigaAM has no streaming and no English. The Qwen3-ASR vLLM image provides both on the same port:
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.stream.yaml up -d   # or: make up-stream
+docker compose -f docker.qwen.yaml up -d   # or: make up-qwen
 make run-stream          # streaming partials over WS /v1/asr/stream
 ```
 
@@ -184,8 +184,8 @@ See [`asr-integration.md`](./asr-integration.md) / [`asr-streaming.md`](./asr-st
 | `llm/giga-asr/asr_server.py` | FastAPI server (OpenAI batch contract; WS gated off) |
 | `llm/giga-asr/Dockerfile` | cu128 torch → GigaAM from git; runtime weight download |
 | `llm/giga-asr/tests/` | contract tests + dev requirements |
-| `docker-compose.yaml` | `stt` builds `giga-asr` (image `voices-stt-giga`) |
-| `docker-compose.stream.yaml` | overlay → Qwen3-ASR vLLM (streaming + multilingual) |
+| `docker.giga.yaml` | `stt` builds GigaAM (`llm/giga3`, image `xcono-asr-giga`) — default backend |
+| `docker.qwen.yaml` | `stt` builds Qwen3-ASR vLLM (`llm/qwen3`, image `xcono-asr-qwen3`) — streaming + multilingual |
 | `docs/research/gigaam_stt.py` | standalone CLI runner (the spike) |
 | `pkg/asr/` | Go client — unchanged; endpoint-agnostic |
 

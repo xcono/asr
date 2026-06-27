@@ -40,6 +40,26 @@ build: check-ort
 test: check-ort
 	go test ./...
 
+# ====== model server (docker compose) ======================================
+# The Python STT server on :8008 — two interchangeable backends as standalone composes.
+# `up` = GigaAM (batch, ru-only); `up-qwen` = Qwen3-ASR (streaming WS /v1/asr/stream,
+# multilingual). DO NOT build/up in a sandbox — needs the GPU box + NVIDIA toolkit.
+
+## up: start the default GigaAM batch STT server (:8008)
+.PHONY: up
+up:
+	docker compose -f docker.giga.yaml up -d
+
+## up-qwen: start the Qwen3-ASR streaming STT server (:8008, WS /v1/asr/stream)
+.PHONY: up-qwen
+up-qwen:
+	docker compose -f docker.qwen.yaml up -d
+
+## down: stop the STT server (either backend — same `asr` project)
+.PHONY: down
+down:
+	docker compose -f docker.giga.yaml down
+
 # ====== deps ===============================================================
 # One-shot: `make deps` fetches PortAudio headers, ONNX Runtime, and the
 # Silero VAD model. Override ORT_VERSION / SILERO_VERSION / ORT / MODEL_PATH

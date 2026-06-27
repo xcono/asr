@@ -1,7 +1,8 @@
 # ASR streaming & context (Milestone 2)
 
-> **V4 current.** Streaming ASR is the opt-in overlay (`docker-compose.stream.yaml`); batch is
-> default. Server now in `llm/qwen3-asr/`; pipecat retired.
+> **V4 current.** Streaming ASR is a standalone backend compose (`docker.qwen.yaml`, in this
+> repo — `make up-qwen`); GigaAM batch (`docker.giga.yaml`) is default. Server in `llm/qwen3/`;
+> pipecat retired.
 >
 > **As of 2026-06-21** the default batch STT is **GigaAM** (ru-only, batch-only — see
 > [`asr-russian.md`](./asr-russian.md)). This streaming overlay swaps in **Qwen3-ASR** (1.7B,

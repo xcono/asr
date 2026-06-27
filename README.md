@@ -147,9 +147,23 @@ The ONNX model ships from `snakers4/silero-vad` ([v5.1.2 tag](https://github.com
 make deps-portaudio      # or:  apt install portaudio19-dev
 ```
 
-### GigaAM STT server (external dependency)
+### STT servers (external dependency)
 
-GigaAM requires a Python server exposing an OpenAI-compatible `/v1/audio/transcriptions` endpoint. This is an external process, not embedded Go code. Point `stt.gigaam.base_url` in config at it. A `docker-compose.yaml` ships the GigaAM server; `xcono/voices` `include:`s it.
+The STT model runs as a Python server exposing an OpenAI-compatible
+`/v1/audio/transcriptions` endpoint on `:8008` — an external process, not embedded Go
+code. Point `stt.gigaam.base_url` in config at it. Two **interchangeable** backends ship
+here as standalone compose files (each a complete `stt:8008` stack on the `voices` network,
+reusing the `llms_hf-cache` volume) — pick exactly one:
+
+| backend | compose file | dir | mode | command |
+|---|---|---|---|---|
+| **GigaAM v3** (default) | `docker.giga.yaml` | `llm/giga3` | batch, Russian-only | `make up` |
+| **Qwen3-ASR-1.7B** | `docker.qwen.yaml` | `llm/qwen3` | streaming (WS `/v1/asr/stream`) + multilingual/English | `make up-qwen` |
+
+GigaAM has no streaming server (batch-only); Qwen3-ASR is the streaming/multilingual path.
+`xcono/voices` selects the backend by which file it `include:`s — its compose interpolates
+`../asr/docker.${ASR_BACKEND:-giga}.yaml`, so `ASR_BACKEND=qwen` there is the same switch as
+`make up-qwen` here. Build/up needs the GPU box + NVIDIA Container Toolkit — not a sandbox.
 
 ### Consuming ASR from another Go process
 

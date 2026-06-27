@@ -6,8 +6,8 @@
 >
 > **As of 2026-06-21, Qwen3-ASR is no longer the default `stt`.** The default batch STT is now
 > **GigaAM** (`make up`, `:8008`) — see [`asr-russian.md`](./asr-russian.md). This doc covers
-> Qwen3-ASR, which is now the **streaming + multilingual** path (`make up-stream`,
-> `docker-compose.stream.yaml`); the protocol details here remain accurate for it.
+> Qwen3-ASR, which is now the **streaming + multilingual** path (`make up-qwen`,
+> `docker.qwen.yaml`); the protocol details here remain accurate for it.
 
 Status: **Milestone 1 (batch) implemented** on 2026-06-16. Milestone 2
 (streaming, session-per-turn) is now also implemented — see

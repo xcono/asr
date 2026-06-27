@@ -1,15 +1,13 @@
-# Standalone ASR service for the xcono/asr module: the GigaAM v3 Python server
-# (OpenAI-compatible batch transcription on :8008, open SOTA Russian ASR).
+# GigaAM v3 STT server (default) — OpenAI-compatible BATCH transcription on :8008.
+# Open SOTA Russian ASR, ru-only, batch-only (no streaming server exists for it).
 #
-# Decoupled from xcono/voices but joins the same `voices` network and reuses the
-# shared HF weight cache, so the orchestrator reaches it as `stt:8008` when both
-# stacks are up — and it still runs on its own for ASR debugging.
+#   docker compose -f docker.giga.yaml up -d         # (make up)
 #
-#   docker compose up -d            # build + run the ASR server
-#   make run                        # then drive the VAD→ASR loop against it (cmd/vox)
-#
-# For the MULTILINGUAL / streaming Qwen3-ASR server instead, build ./llm/qwen3.
-# DO NOT build/up in a sandbox — needs the GPU box + NVIDIA Container Toolkit.
+# One of two interchangeable STT backends in this repo; pick exactly ONE — this file
+# (GigaAM, batch/ru) or docker.qwen.yaml (Qwen3-ASR, streaming/multilingual). Both expose
+# `stt:8008`, join the `voices` network, and reuse the shared HF weight cache, so xcono/voices
+# selects the backend by which file it `include:`s. DO NOT build/up in a sandbox — needs the
+# GPU box + NVIDIA Container Toolkit.
 
 name: asr
 
