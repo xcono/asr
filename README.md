@@ -51,7 +51,7 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
   "asr": {
     "provider": "gigaam",
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
-    "elevenlabs": { "api_key": "", "model": "" }
+    "elevenlabs": { "api_key": "", "model": "", "language_code": "", "base_url": "" }
   }
 }
 ```
@@ -70,7 +70,7 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
 ### STT providers
 
 - **gigaam** — local batch STT via an OpenAI-compatible HTTP API (`/v1/audio/transcriptions`). Requires a separate Python server running at `base_url`.
-- **elevenlabs** — remote STT (not yet wired in code, config placeholder only).
+- **elevenlabs** — cloud batch STT via the ElevenLabs Scribe API (`/v1/speech-to-text`, default model `scribe_v2`). Requires `api_key`; `language_code` (e.g. `"ru"`) is an optional hint, empty means server-side auto-detect.
 
 ## VAD
 

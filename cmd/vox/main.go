@@ -18,6 +18,7 @@ import (
 
 	"github.com/gordonklaus/portaudio"
 
+	stt "github.com/xcono/asr"
 	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/audio"
 	"github.com/xcono/asr/pkg/config"
@@ -75,12 +76,9 @@ func run(cfg *config.Config) error {
 	}
 
 	// --- ASR recognizer ---
-	var rec asr.Recognizer
-	switch cfg.ASR.Provider {
-	case "gigaam":
-		rec = &asr.Transcriber{BaseURL: cfg.ASR.GigaAM.BaseURL, Model: cfg.ASR.GigaAM.Model}
-	default:
-		return fmt.Errorf("unknown asr provider: %s", cfg.ASR.Provider)
+	rec, err := stt.NewRecognizer(cfg.ASR)
+	if err != nil {
+		return err
 	}
 
 	// asr.Listen takes the Detector interface; under "vad.debug" wrap the model to

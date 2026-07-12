@@ -78,9 +78,10 @@ modcache — the fork's `testfiles/silero_vad.onnx` — or downloads from
 
 `config.json` (or the path passed via `-config`). Schema lives in
 `pkg/config/config.go`; `Load` calls `setDefaults`, so every zero value has a
-sensible fallback and a minimal `{}` file still runs. Provider is `"gigaam"` by
-default; `"elevenlabs"` is parsed but **not wired in code** (config placeholder
-only). See `README.md` for the full table of VAD parameters and their meaning.
+sensible fallback and a minimal `{}` file still runs. Provider is `"gigaam"`
+(local, default) or `"elevenlabs"` (cloud Scribe, `pkg/asr/elevenlabs.go`); both
+are built by `stt.NewRecognizer`. See `README.md` for the full table of VAD
+parameters and their meaning.
 
 ## Architecture / data flow
 
@@ -178,10 +179,11 @@ VAD-style consumers), not int16.
 - **`silero-vad-go` is a fork via `go.mod replace`.** The import path is
   `github.com/streamer45/silero-vad-go`, but `replace` redirects it to
   `github.com/hylarucoder/silero-vad-onnx-go`. Don't "tidy" the replace away.
-- **ElevenLabs STT is config-only.** `STTConfig.ElevenLabs` parses, but
-  `main.go`'s provider switch has no `"elevenlabs"` case — it will fail with
-  `unknown stt provider`. Add the case + a `Recognizer` implementation before
-  relying on it.
+- **ElevenLabs STT is batch-only, like GigaAM.** `asr.ElevenLabs`
+  (`pkg/asr/elevenlabs.go`) posts each VAD-segmented clip to the cloud Scribe
+  API (`/v1/speech-to-text`, `scribe_v2`, `xi-api-key` header). It needs
+  `elevenlabs.api_key` in config — `stt.NewRecognizer` does not validate it, so
+  a missing key fails at request time (401), not startup.
 - **Streaming STT is unused.** `asr.StreamSession` / `DialStream` /
   `WSURLFromHTTP` are implemented and tested but not called by the pipeline.
   `vad.EndOfTurn` (the streaming turn-end signal) is also unused outside its

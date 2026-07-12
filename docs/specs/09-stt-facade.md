@@ -53,5 +53,7 @@ stream (start/end/text + flag cleared), flag stays set while a turn is open,
 batch transcribe, idempotent `Close`. `go test -race` clean.
 
 ## Not in scope (deferred until a consumer needs it)
-`VoiceFileID` plumbing, an `elevenlabs` provider case, streaming STT, and making
-`cmd/vox` consume this facade. Keep the surface minimal (AGENTS.md).
+`VoiceFileID` plumbing and streaming STT. Since this spec was written, two
+deferred items landed: the `elevenlabs` provider case (cloud Scribe,
+`pkg/asr/elevenlabs.go`, built by the exported `stt.NewRecognizer`) and
+`cmd/vox` consuming that factory. Keep the surface minimal (AGENTS.md).

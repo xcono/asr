@@ -44,8 +44,10 @@ type GigaAMConfig struct {
 
 // ElevenLabsConfig holds configuration for the remote ElevenLabs STT service.
 type ElevenLabsConfig struct {
-	APIKey string `json:"api_key"`
-	Model  string `json:"model"`
+	APIKey       string `json:"api_key"`
+	Model        string `json:"model"`         // "" => "scribe_v2"
+	LanguageCode string `json:"language_code"` // ISO-639-1/-3 hint, e.g. "ru"; "" => auto-detect
+	BaseURL      string `json:"base_url"`      // "" => "https://api.elevenlabs.io"
 }
 
 // Load reads config.json from the given path and unmarshals it.
