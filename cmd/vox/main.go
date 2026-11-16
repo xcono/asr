@@ -75,10 +75,13 @@ func run(cfg *config.Config) error {
 	}
 
 	// --- STT recognizer ---
-	var rec asr.Recognizer
+	var rec *asr.Transcriber
 	switch cfg.STT.Provider {
 	case "gigaam":
 		rec = &asr.Transcriber{BaseURL: cfg.STT.GigaAM.BaseURL, Model: cfg.STT.GigaAM.Model}
+	case "whisper":
+		w := cfg.STT.Whisper
+		rec = &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt}
 	default:
 		return fmt.Errorf("unknown stt provider: %s", cfg.STT.Provider)
 	}
@@ -96,7 +99,7 @@ func run(cfg *config.Config) error {
 	}()
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
-	fmt.Printf("STT: %s (%s)\n", cfg.STT.Provider, cfg.STT.GigaAM.BaseURL)
+	fmt.Printf("STT: %s (%s)\n", cfg.STT.Provider, rec.BaseURL)
 
 	events := asr.Listen(ctx, mic, model, rec, timing)
 	for ev := range events {

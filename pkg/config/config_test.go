@@ -36,6 +36,10 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "gigaam", cfg.STT.Provider)
 	assert.Equal(t, "http://localhost:8008/v1", cfg.STT.GigaAM.BaseURL)
 	assert.Empty(t, cfg.STT.GigaAM.Model)
+	assert.Equal(t, "http://localhost:8008/v1", cfg.STT.Whisper.BaseURL)
+	assert.Equal(t, "ru", cfg.STT.Whisper.Language)
+	assert.Empty(t, cfg.STT.Whisper.Model)
+	assert.Empty(t, cfg.STT.Whisper.Prompt)
 	assert.Empty(t, cfg.STT.ElevenLabs.APIKey)
 	assert.Empty(t, cfg.STT.ElevenLabs.Model)
 }
@@ -88,6 +92,25 @@ func TestLoad_FullConfig(t *testing.T) {
 	assert.Equal(t, "custom-model", cfg.STT.GigaAM.Model)
 	assert.Equal(t, "sk-abc123", cfg.STT.ElevenLabs.APIKey)
 	assert.Equal(t, "eleven_multilingual_v2", cfg.STT.ElevenLabs.Model)
+}
+
+func TestLoad_WhisperSection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	requireWriteString(t, path, `{"stt": {"provider": "whisper", "whisper": {
+		"base_url": "http://gpu:9000/v1", "model": "large-v3-turbo",
+		"language": "auto", "prompt": "Kibana, хотфикс"}}}`)
+
+	cfg, err := Load(path)
+	assert.NoError(t, err)
+	assert.Equal(t, "whisper", cfg.STT.Provider)
+	assert.Equal(t, WhisperConfig{
+		BaseURL:  "http://gpu:9000/v1",
+		Model:    "large-v3-turbo",
+		Language: "auto",
+		Prompt:   "Kibana, хотфикс",
+	}, cfg.STT.Whisper)
 }
 
 func TestLoad_MissingFile(t *testing.T) {

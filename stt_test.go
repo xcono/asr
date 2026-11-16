@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xcono/asr/pkg/asr"
+	"github.com/xcono/asr/pkg/config"
 	"github.com/xcono/asr/pkg/vad"
 )
 
@@ -141,5 +143,33 @@ func TestServiceCloseIsIdempotent(t *testing.T) {
 	}
 	if err := svc.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestRecognizerWhisper checks the facade maps the whisper config section onto
+// the batch client, including the whisper.cpp-only fields.
+func TestRecognizerWhisper(t *testing.T) {
+	rec, err := recognizer(config.STTConfig{
+		Provider: "whisper",
+		Whisper:  config.WhisperConfig{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p"},
+	})
+	if err != nil {
+		t.Fatalf("recognizer: %v", err)
+	}
+	tr, ok := rec.(*asr.Transcriber)
+	if !ok {
+		t.Fatalf("recognizer type = %T, want *asr.Transcriber", rec)
+	}
+	want := asr.Transcriber{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p"}
+	if *tr != want {
+		t.Fatalf("transcriber = %+v, want %+v", *tr, want)
+	}
+}
+
+// TestRecognizerUnknownProvider keeps a typo in config a hard error rather than
+// a silently missing transcriber.
+func TestRecognizerUnknownProvider(t *testing.T) {
+	if _, err := recognizer(config.STTConfig{Provider: "nope"}); err == nil {
+		t.Fatal("expected an error for an unknown provider, got nil")
 	}
 }

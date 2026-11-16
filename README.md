@@ -48,8 +48,9 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
     "preroll_ms": 300
   },
   "stt": {
-    "provider": "gigaam",
+    "provider": "whisper",
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
+    "whisper": { "base_url": "http://localhost:8008/v1", "model": "", "language": "ru", "prompt": "" },
     "elevenlabs": { "api_key": "", "model": "" }
   }
 }
@@ -69,7 +70,10 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
 ### STT providers
 
 - **gigaam** — local batch STT via an OpenAI-compatible HTTP API (`/v1/audio/transcriptions`). Requires a separate Python server running at `base_url`.
+- **whisper** — the same batch client against the whisper.cpp server (`docker.whisper.yaml`). Extra fields `language` (default `ru`; `auto` to detect — with a fixed language whisper.cpp translates other languages instead of transcribing them) and `prompt` (default empty; decoder context that steers spelling of terms). Both are sent only when non-empty. Multi-segment replies are flattened to one line.
 - **elevenlabs** — remote STT (not yet wired in code, config placeholder only).
+
+`provider` defaults to `gigaam` in code; the checked-in `config.json` selects `whisper`.
 
 ## VAD
 
@@ -149,16 +153,18 @@ make deps-portaudio      # or:  apt install portaudio19-dev
 
 ### STT servers (external dependency)
 
-The STT model runs as a Python server exposing an OpenAI-compatible
+The STT model runs as a separate server exposing an OpenAI-compatible
 `/v1/audio/transcriptions` endpoint on `:8008` — an external process, not embedded Go
-code. Point `stt.gigaam.base_url` in config at it. Two **interchangeable** backends ship
-here as standalone compose files (each a complete `stt:8008` stack on the `voices` network,
-reusing the `llms_hf-cache` volume) — pick exactly one:
+code. Point `stt.<provider>.base_url` in config at it. Three **interchangeable** backends ship
+here as standalone compose files (each a complete `stt:8008` stack on the `voices` network;
+GigaAM and Qwen reuse the external `llms_hf-cache` volume, Whisper downloads its ggml file into
+its own `whisper-models` volume) — pick exactly one:
 
 | backend | compose file | dir | mode | command |
 |---|---|---|---|---|
 | **GigaAM v3** (default) | `docker.giga.yaml` | `llm/giga3` | batch, Russian-only | `make up` |
 | **Qwen3-ASR-1.7B** | `docker.qwen.yaml` | `llm/qwen3` | streaming (WS `/v1/asr/stream`) + multilingual/English | `make up-qwen` |
+| **Whisper large-v3-turbo** (whisper.cpp, GPU 1) | `docker.whisper.yaml` | `llm/whisper` | batch, multilingual (default `ru`) | `make up-whisper` / `make down-whisper` |
 
 GigaAM has no streaming server (batch-only); Qwen3-ASR is the streaming/multilingual path.
 `xcono/voices` selects the backend by which file it `include:`s — its compose interpolates

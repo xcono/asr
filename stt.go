@@ -188,13 +188,16 @@ func (s *Service) Close() error {
 	return err
 }
 
-// recognizer builds the STT provider from config. Mirrors cmd/vox: only
-// "gigaam" is wired today; "elevenlabs" is config-only until a Recognizer
+// recognizer builds the STT provider from config. Mirrors cmd/vox: "gigaam"
+// and "whisper" are wired; "elevenlabs" is config-only until a Recognizer
 // implementation exists.
 func recognizer(c config.STTConfig) (asr.Recognizer, error) {
 	switch c.Provider {
 	case "gigaam":
 		return &asr.Transcriber{BaseURL: c.GigaAM.BaseURL, Model: c.GigaAM.Model}, nil
+	case "whisper":
+		w := c.Whisper
+		return &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt}, nil
 	default:
 		return nil, fmt.Errorf("stt: unknown provider %q", c.Provider)
 	}

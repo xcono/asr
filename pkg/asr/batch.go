@@ -19,10 +19,22 @@ import (
 )
 
 // Transcriber posts whole utterances to an OpenAI-compatible STT endpoint.
+//
+// Optional fields are sent only when non-empty, so a server that never asked
+// for them (GigaAM, Qwen) sees exactly the same form as before they existed.
 type Transcriber struct {
-	BaseURL string       // e.g. "http://localhost:8008/v1"
-	Model   string       // optional; sent as the "model" form field
-	Client  *http.Client // nil => a client with DefaultTimeout
+	BaseURL string // e.g. "http://localhost:8008/v1"
+	Model   string // optional; sent as the "model" form field
+	// Language is the optional "language" form field. whisper.cpp falls back to
+	// its server-side -l when it is absent, and with a fixed language it
+	// translates speech in any other language instead of transcribing it — so
+	// set "auto" here when the speaker's language is not known in advance.
+	Language string
+	// Prompt is the optional "prompt" form field. whisper.cpp uses it as
+	// decoder context, which steers the spelling of terms toward the prompt's
+	// forms; it does not reliably fix misheard words on short clips.
+	Prompt string
+	Client *http.Client // nil => a client with DefaultTimeout
 }
 
 // DefaultTimeout caps a single Transcribe HTTP request so a hung STT server
@@ -47,6 +59,12 @@ func (tr *Transcriber) Transcribe(ctx context.Context, samples []int16, rate int
 	_ = mw.WriteField("response_format", "json")
 	if tr.Model != "" {
 		_ = mw.WriteField("model", tr.Model)
+	}
+	if tr.Language != "" {
+		_ = mw.WriteField("language", tr.Language)
+	}
+	if tr.Prompt != "" {
+		_ = mw.WriteField("prompt", tr.Prompt)
 	}
 	if err := mw.Close(); err != nil {
 		return "", err
@@ -80,5 +98,21 @@ func (tr *Transcriber) Transcribe(ctx context.Context, samples []int16, rate int
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", fmt.Errorf("asr: decode response: %w", err)
 	}
-	return strings.TrimSpace(out.Text), nil
+	return oneLine(out.Text), nil
+}
+
+// oneLine flattens a transcript to a single line. whisper.cpp ends every
+// segment with "\n" and starts the next with a space, so a long utterance comes
+// back as " seg1.\n seg2.\n"; consumers expect one line of text per turn. Each
+// line is trimmed and the non-empty ones are joined with a single space, which
+// leaves an ordinary one-line response exactly as strings.TrimSpace would.
+func oneLine(text string) string {
+	parts := strings.Split(text, "\n")
+	kept := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, " ")
 }

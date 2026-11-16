@@ -27,8 +27,9 @@ type VADConfig struct {
 
 // STTConfig holds the speech-to-text provider configuration.
 type STTConfig struct {
-	Provider   string           `json:"provider"` // "gigaam" or "elevenlabs"
+	Provider   string           `json:"provider"` // "gigaam", "whisper" or "elevenlabs"
 	GigaAM     GigaAMConfig     `json:"gigaam"`
+	Whisper    WhisperConfig    `json:"whisper"`
 	ElevenLabs ElevenLabsConfig `json:"elevenlabs"`
 }
 
@@ -36,6 +37,16 @@ type STTConfig struct {
 type GigaAMConfig struct {
 	BaseURL string `json:"base_url"` // e.g. "http://localhost:8008/v1"
 	Model   string `json:"model"`    // Optional model name
+}
+
+// WhisperConfig holds configuration for the local whisper.cpp batch STT server
+// (docker.whisper.yaml). Language and Prompt map to the request fields of the
+// same name; see llm/whisper/README.md for how the server treats them.
+type WhisperConfig struct {
+	BaseURL  string `json:"base_url"` // e.g. "http://localhost:8008/v1"
+	Model    string `json:"model"`    // Optional; whisper.cpp ignores it
+	Language string `json:"language"` // Default "ru"; "auto" to detect
+	Prompt   string `json:"prompt"`   // Optional decoder context; empty by default
 }
 
 // ElevenLabsConfig holds configuration for the remote ElevenLabs STT service.
@@ -90,6 +101,12 @@ func (c *Config) setDefaults() {
 	}
 	if c.STT.GigaAM.BaseURL == "" {
 		c.STT.GigaAM.BaseURL = "http://localhost:8008/v1"
+	}
+	if c.STT.Whisper.BaseURL == "" {
+		c.STT.Whisper.BaseURL = "http://localhost:8008/v1"
+	}
+	if c.STT.Whisper.Language == "" {
+		c.STT.Whisper.Language = "ru"
 	}
 }
 

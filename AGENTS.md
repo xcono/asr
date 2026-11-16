@@ -24,6 +24,7 @@ make build    # compile to ./bin/vox
 make test     # go test ./...  (guarded — see ONNX Runtime below)
 make env      # print resolved ORT path + model path
 make help     # list documented targets
+make up-whisper / down-whisper   # Whisper STT server (docker.whisper.yaml)
 ```
 
 `make deps` is idempotent and splits into `deps-portaudio` (`apt install
@@ -76,8 +77,11 @@ modcache — the fork's `testfiles/silero_vad.onnx` — or downloads from
 `config.json` (or the path passed via `-config`). Schema lives in
 `pkg/config/config.go`; `Load` calls `setDefaults`, so every zero value has a
 sensible fallback and a minimal `{}` file still runs. Provider is `"gigaam"` by
-default; `"elevenlabs"` is parsed but **not wired in code** (config placeholder
-only). See `README.md` for the full table of VAD parameters and their meaning.
+default in code; the checked-in `config.json` selects `"whisper"` (section
+`stt.whisper`: `base_url` default `http://localhost:8008/v1`, `model` (ignored by
+whisper.cpp), `language` default `ru`, `prompt` default empty). Both providers
+use the same `asr.Transcriber`; `language`/`prompt` are sent only when non-empty.
+`"elevenlabs"` is parsed but **not wired in code** (config placeholder only). See `README.md` for the full table of VAD parameters and their meaning.
 
 ## Architecture / data flow
 
@@ -88,7 +92,8 @@ Mic → audio.Capture → asr.Listen ┬─ SpeechStart → log / channel
 ```
 
 - `cmd/vox/main.go` is the only entry point: load config → load Silero → init
-  PortAudio → build an `asr.Recognizer` (only `gigaam` switch case exists) →
+  PortAudio → build an `asr.Recognizer` (`gigaam` or `whisper`; the same switch
+  is duplicated in `stt.go`'s `recognizer` — keep both in step) →
   range over `asr.Listen`'s event channel → log each event. No transport.
 - `asr.Listen` (`pkg/asr/listen.go`) is the pipeline controller and the place
   the four domains meet. It owns the FSM, preroll ring, and utterance buffer,
@@ -106,7 +111,10 @@ Mic → audio.Capture → asr.Listen ┬─ SpeechStart → log / channel
 - `pkg/audio` — PortAudio `Capture` + PCM16LE / WAV codec + the
   Linux-only `SilenceStderr` trick (see Gotchas).
 - `pkg/config` — config schema + `Load`. `VADConfig.ToTiming()` lives here
-  (not in `vad`) deliberately, to keep `config` from importing `vad`.
+  (not as a `vad` constructor) deliberately, so all config-schema concerns stay
+  in one package. `config` therefore imports `vad` (for `Timing`) — no cycle,
+  since `vad` imports nothing from this project — which makes `config`
+  cgo-linked too.
 
 ## Audio wire format (hard constraint)
 
@@ -190,7 +198,9 @@ VAD-style consumers), not int16.
 Goal is to avoid Python in the codebase. GigaAM currently requires an external
 Python server exposing an OpenAI-compatible `/v1/audio/transcriptions`
 endpoint — that process is an external dependency, not embedded Go code, and is
-pointed at via `stt.gigaam.base_url`. If a Go-native ASR alternative becomes
+pointed at via `stt.gigaam.base_url`. Whisper runs in the upstream whisper.cpp
+(C++) image, same endpoint, via `stt.whisper.base_url`; its measured HTTP
+contract is in `llm/whisper/README.md`. If a Go-native ASR alternative becomes
 viable, replace the `Transcriber`.
 
 ## Development

@@ -1,7 +1,8 @@
 # Makefile for the vox service.
 #
-# Standalone ASR/STT Go service for a realtime voice agent.
-# Emits VAD and transcription events over NATS Jetstream (embedded).
+# Builds cmd/vox, the standalone debug binary of the asr module (Silero VAD +
+# STT for a realtime voice agent). Logs VAD and transcription events to stdout;
+# the module is transport-free (events flow over Go channels only).
 
 # --- Dependency versions (overridable) --------------------------------------
 ORT_VERSION ?= 1.18.1
@@ -41,9 +42,10 @@ test: check-ort
 	go test ./...
 
 # ====== model server (docker compose) ======================================
-# The Python STT server on :8008 — two interchangeable backends as standalone composes.
+# The STT server on :8008 — three interchangeable backends as standalone composes; run ONE.
 # `up` = GigaAM (batch, ru-only); `up-qwen` = Qwen3-ASR (streaming WS /v1/asr/stream,
-# multilingual). DO NOT build/up in a sandbox — needs the GPU box + NVIDIA toolkit.
+# multilingual); `up-whisper` = Whisper large-v3-turbo on whisper.cpp (batch, multilingual).
+# DO NOT build/up in a sandbox — needs the GPU box + NVIDIA toolkit.
 
 ## up: start the default GigaAM batch STT server (:8008)
 .PHONY: up
@@ -55,10 +57,20 @@ up:
 up-qwen:
 	docker compose -f docker.qwen.yaml up -d
 
-## down: stop the STT server (either backend — same `asr` project)
+## up-whisper: start the Whisper large-v3-turbo batch STT server (:8008, whisper.cpp)
+.PHONY: up-whisper
+up-whisper:
+	docker compose -f docker.whisper.yaml up -d
+
+## down: stop the GigaAM or Qwen STT server (same `asr` project)
 .PHONY: down
 down:
 	docker compose -f docker.giga.yaml down
+
+## down-whisper: stop the Whisper STT server (keeps the model volume)
+.PHONY: down-whisper
+down-whisper:
+	docker compose -f docker.whisper.yaml down
 
 # ====== deps ===============================================================
 # One-shot: `make deps` fetches PortAudio headers, ONNX Runtime, and the

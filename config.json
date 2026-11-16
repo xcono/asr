@@ -9,10 +9,16 @@
     "preroll_ms": 300
   },
   "stt": {
-    "provider": "gigaam",
+    "provider": "whisper",
     "gigaam": {
       "base_url": "http://localhost:8008/v1",
       "model": ""
+    },
+    "whisper": {
+      "base_url": "http://localhost:8008/v1",
+      "model": "",
+      "language": "ru",
+      "prompt": ""
     },
     "elevenlabs": {
       "api_key": "",
