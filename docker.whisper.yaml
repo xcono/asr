@@ -1,6 +1,8 @@
 # Whisper large-v3-turbo STT server — whisper.cpp `whisper-server` (CUDA), OpenAI-compatible
 # BATCH path (/v1/audio/transcriptions) on :8008. Multilingual; default language Russian.
-# Upstream prebuilt image, no local build; see llm/whisper/README.md for the measured contract.
+# Built locally from llm/whisper/Dockerfile (upstream whisper.cpp, compiled for sm_120): the upstream
+# prebuilt image has no RTX 50xx code and JIT-compiles kernels at run time. Measured contract and
+# the reason for the local build are in llm/whisper/README.md.
 #
 #   docker compose -f docker.whisper.yaml up -d
 #
@@ -19,8 +21,10 @@
 name: asr
 
 x-whisper-image: &whisper-image
-  # ghcr.io/ggml-org/whisper.cpp:main-cuda (CUDA 13), pinned by digest.
-  image: ghcr.io/ggml-org/whisper.cpp@sha256:ff5d55105bd85500825a7ee6b3d991a5ec57c3e70109a8c836fd47f673f02b68
+  # whisper.cpp pinned to a commit and compiled with CMAKE_CUDA_ARCHITECTURES=120a-real.
+  build:
+    context: ./llm/whisper
+  image: xcono-asr-whisper
 
 services:
   model:

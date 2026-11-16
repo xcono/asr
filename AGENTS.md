@@ -198,9 +198,10 @@ VAD-style consumers), not int16.
 Goal is to avoid Python in the codebase. GigaAM currently requires an external
 Python server exposing an OpenAI-compatible `/v1/audio/transcriptions`
 endpoint — that process is an external dependency, not embedded Go code, and is
-pointed at via `stt.gigaam.base_url`. Whisper runs in the upstream whisper.cpp
-(C++) image, same endpoint, via `stt.whisper.base_url`; its measured HTTP
-contract is in `llm/whisper/README.md`. If a Go-native ASR alternative becomes
+pointed at via `stt.gigaam.base_url`. Whisper runs in a locally built whisper.cpp
+(C++) image (`llm/whisper/Dockerfile`, compiled for sm_120 — the upstream image
+has no RTX 50xx code), same endpoint, via `stt.whisper.base_url`; its measured
+HTTP contract is in `llm/whisper/README.md`. If a Go-native ASR alternative becomes
 viable, replace the `Transcriber`.
 
 ## Development
