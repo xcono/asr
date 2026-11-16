@@ -1,0 +1,92 @@
+# Whisper large-v3-turbo STT server — whisper.cpp `whisper-server` (CUDA), OpenAI-compatible
+# BATCH path (/v1/audio/transcriptions) on :8008. Multilingual; default language Russian.
+# Upstream prebuilt image, no local build; see llm/whisper/README.md for the measured contract.
+#
+#   docker compose -f docker.whisper.yaml up -d
+#
+# One of three interchangeable STT backends in this repo; pick exactly ONE — this file
+# (Whisper, batch/multilingual), docker.giga.yaml (GigaAM, batch/ru) or docker.qwen.yaml
+# (Qwen3-ASR, streaming/multilingual). All expose `stt:8008` and join the `voices` network.
+#
+# Weights are NOT in the shared HF cache: whisper.cpp needs a single ggml file, not an HF
+# snapshot. The one-shot `model` service fetches it with the project's own
+# download-ggml-model.sh into the compose-managed `whisper-models` volume (created on first
+# `up`, ~1.6 GB, skipped once present), so a clean machine needs nothing pre-created.
+#
+# Runs on GPU 1 by default (GPU 0 carries the desktop); override with ASR_GPU. DO NOT up in a
+# sandbox — needs the GPU box + NVIDIA Container Toolkit.
+
+name: asr
+
+x-whisper-image: &whisper-image
+  # ghcr.io/ggml-org/whisper.cpp:main-cuda (CUDA 13), pinned by digest.
+  image: ghcr.io/ggml-org/whisper.cpp@sha256:ff5d55105bd85500825a7ee6b3d991a5ec57c3e70109a8c836fd47f673f02b68
+
+services:
+  model:
+    <<: *whisper-image
+    # Download into a temp dir and rename, so an interrupted download never leaves a
+    # truncated file that the script's "already exists" check would then accept.
+    command:
+      - |
+        set -e
+        f=/models/ggml-$${WHISPER_MODEL}.bin
+        if [ -s "$$f" ]; then echo "model present: $$f"; exit 0; fi
+        rm -rf /models/.partial && mkdir -p /models/.partial
+        /app/models/download-ggml-model.sh "$${WHISPER_MODEL}" /models/.partial
+        mv "/models/.partial/ggml-$${WHISPER_MODEL}.bin" "$$f"
+        rm -rf /models/.partial
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
+    volumes:
+      - whisper-models:/models
+    restart: "no"
+
+  stt:
+    <<: *whisper-image
+    depends_on:
+      model:
+        condition: service_completed_successfully
+    ports:
+      - "8008:8008"
+    # --inference-path keeps the client's BaseURL=http://localhost:8008/v1 working unchanged.
+    # -l sets the default language; a per-request `language` field overrides it.
+    # --beam-size 5 matches whisper-cli's default: the server's own default (greedy) looped
+    # ("я задеплоил новый релиз, я задеплоил…") and varied run to run on 3–4 s RU clips;
+    # beam 5 gave the correct text on every repeat at ~0.1–0.4 s per clip.
+    command:
+      - >-
+        whisper-server
+        --host 0.0.0.0 --port 8008
+        --inference-path /v1/audio/transcriptions
+        -m /models/ggml-$${WHISPER_MODEL}.bin
+        -l $${WHISPER_LANGUAGE}
+        --beam-size 5
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}     # "auto" to detect per request
+    volumes:
+      - whisper-models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${ASR_GPU:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+# Compose-managed (not external): created on first `up`, survives `down` (not `down -v`).
+volumes:
+  whisper-models:
+
+# Literal `voices` network so this service and the voices orchestrator co-reside.
+networks:
+  default:
+    name: voices
