@@ -53,7 +53,8 @@ No native dependencies: the module builds with `CGO_ENABLED=0`. Mic capture
 talks to PulseAudio (or PipeWire's pulse layer) in pure Go via
 [`jfreymuth/pulse`](https://github.com/jfreymuth/pulse); it needs a running
 PulseAudio/`pipewire-pulse` server, nothing to install at build time. The
-Silero VAD is pure Go ([`zserge/govad`](https://github.com/zserge/govad)) with the v5 weights
+Silero VAD is pure Go (`pkg/vad/internal/silero`, vendored from
+[`zserge/govad`](https://github.com/zserge/govad), MIT) with the v5 weights
 embedded in the binary — no model file, no ONNX Runtime.
 
 ## Config
@@ -100,11 +101,14 @@ has a default, so `{}` is a valid config.
 The defaults are tuned for Silero **v5** probabilities; a different model
 generation needs re-tuning.
 
-Silero's recurrent state is reset after 500 ms of windows below the release
-gate (`vad.ResetAfterSilenceMs`; not a config field). In a long stream the
-model otherwise goes deaf and scores loud words near zero, losing several
-words in a row; on two session recordings the reset cut the loud bursts left
-outside every segment from 27 of 124 to 1 and from 12 of 40 to 0.
+Each window is fed to Silero with the previous window's last 64 samples as
+context, as the official implementation does. Without that context v5 goes
+deaf in a long stream and scores loud words near zero
+([snakers4/silero-vad#771](https://github.com/snakers4/silero-vad/issues/771)):
+on a 304 s session recording 27 of 124 loud bursts fell outside every segment,
+with the context 1. The model state is never reset; the probabilities match
+the official implementation to within 4e-6. `threshold` 0.30 was picked
+before the context was added and still needs re-checking on a live mic.
 
 #### Replaying a session: `vadscan`
 
@@ -118,11 +122,11 @@ go run ./cmd/vadscan [-config config.json] [-loud -35] [-min-ms 96] file.wav ...
 ```
 
 ```
-recordings/session-….wav: 303.6s, 88 segments, mean_peak=0.94, resets=439, loud bursts 124, outside segments 1 (loud >= -35 dBFS, >= 96 ms)
+recordings/session-….wav: 303.6s, 89 segments, mean_peak=0.93, loud bursts 124, outside segments 1 (loud >= -35 dBFS, >= 96 ms)
 segments:
-  at=4.32s end=5.25s clip=1.22s vad_peak=0.91 speech_win=9/38
+  at=4.22s end=5.31s clip=1.38s vad_peak=0.93 speech_win=14/43
 loud bursts outside segments:
-  at=279.10s 0.13s peak=-16.5dBFS max_prob=0.19
+  at=279.10s 0.13s peak=-16.5dBFS max_prob=0.64
 ```
 
 `at=`/`end=` match `vox`'s `speaking started/stopped at=`; `clip` is what
@@ -132,7 +136,6 @@ or above `-loud` dBFS that may contain up to 96 ms of quieter windows and
 lasts at least `-min-ms`; it counts as covered when it overlaps a clip.
 `max_prob` is Silero's best probability inside a missed burst — near zero is
 a deaf model or non-speech, just under `threshold` is a tuning question.
-`resets` counts the state resets above.
 
 ### STT providers
 

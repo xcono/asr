@@ -48,54 +48,6 @@ func TestModelInferNonSpeechStaysBelowThreshold(t *testing.T) {
 	}
 }
 
-// The reset fires on the window that completes ResetAfterSilenceMs of quiet,
-// not one earlier, and restarts the count so a long silence keeps resetting.
-func TestModelPauseEndedAfterQuietRun(t *testing.T) {
-	m, err := NewModel()
-	if err != nil {
-		t.Fatalf("NewModel: %v", err)
-	}
-	n := msToWindows(ResetAfterSilenceMs)
-	for round := 0; round < 2; round++ {
-		for i := 1; i < n; i++ {
-			if m.pauseEnded(0.01) {
-				t.Fatalf("round %d: reset after %d quiet windows, want %d", round, i, n)
-			}
-		}
-		if !m.pauseEnded(0.01) {
-			t.Fatalf("round %d: no reset after %d quiet windows", round, n)
-		}
-	}
-}
-
-// A window at the silence gate or above is not quiet: it restarts the count, so
-// a pause shorter than ResetAfterSilenceMs between words never resets.
-func TestModelPauseEndedGateRestartsCount(t *testing.T) {
-	m, err := NewModel()
-	if err != nil {
-		t.Fatalf("NewModel: %v", err)
-	}
-	n := msToWindows(ResetAfterSilenceMs)
-	for _, loud := range []float32{Threshold - Hysteresis, Threshold, 0.9} {
-		for i := 1; i < n; i++ {
-			if m.pauseEnded(0.01) {
-				t.Fatalf("loud %.2f: early reset at quiet window %d", loud, i)
-			}
-		}
-		if m.pauseEnded(loud) {
-			t.Fatalf("loud %.2f: reset on a window at/above the gate", loud)
-		}
-	}
-	for i := 1; i < n; i++ {
-		if m.pauseEnded(0.01) {
-			t.Fatalf("reset after %d quiet windows following a loud one, want %d", i, n)
-		}
-	}
-	if !m.pauseEnded(0.01) {
-		t.Fatalf("no reset after %d quiet windows following a loud one", n)
-	}
-}
-
 // noiseWindows returns n deterministic windows of mixed tone and noise, so the
 // recurrent state moves away from the fresh one.
 func noiseWindows(n int) [][]int16 {
@@ -122,10 +74,10 @@ func toFloat(win []int16) []float32 {
 	return out
 }
 
-// govad.Reset must clear everything a new detector would not have: if it left
-// any state behind, "reset after a pause" would not restore fresh-model
-// sensitivity.
-func TestModelGovadResetEqualsNew(t *testing.T) {
+// silero.Reset must clear everything a new detector would not have — the
+// LSTM state and the 64-sample input context — so a reused detector scores a
+// new stream exactly like a fresh one.
+func TestModelSileroResetEqualsNew(t *testing.T) {
 	used, err := NewModel()
 	if err != nil {
 		t.Fatalf("NewModel: %v", err)
@@ -143,49 +95,6 @@ func TestModelGovadResetEqualsNew(t *testing.T) {
 		a, b := used.sd.Process(toFloat(w)), fresh.sd.Process(toFloat(w))
 		if a != b {
 			t.Fatalf("window %d after Reset: %v, fresh model %v", i, a, b)
-		}
-	}
-}
-
-// After an Infer-triggered reset the model is a fresh one that has read the
-// triggering quiet window (the warm-up): same probabilities on the same input.
-func TestModelInferResetBehavesLikeFresh(t *testing.T) {
-	m, err := NewModel()
-	if err != nil {
-		t.Fatalf("NewModel: %v", err)
-	}
-	wins := noiseWindows(60)
-	for _, w := range wins[:40] {
-		m.sd.Process(toFloat(w)) // age the state without the reset logic
-	}
-	// The aged state may score silence above the gate for a while; feed it
-	// until the reset fires (the countdown itself is tested above).
-	silence := make([]int16, Window)
-	for i := 0; m.Resets() == 0; i++ {
-		if i == 200 {
-			t.Fatalf("no reset after %d silent windows", i)
-		}
-		if _, err := m.Infer(silence); err != nil {
-			t.Fatalf("Infer: %v", err)
-		}
-	}
-
-	fresh, err := NewModel()
-	if err != nil {
-		t.Fatalf("NewModel: %v", err)
-	}
-	fresh.sd.Process(toFloat(silence)) // the warm-up window
-	for i, w := range wins[40:] {
-		a, err := m.Infer(w)
-		if err != nil {
-			t.Fatalf("Infer: %v", err)
-		}
-		b, err := fresh.Infer(w)
-		if err != nil {
-			t.Fatalf("Infer: %v", err)
-		}
-		if a != b {
-			t.Fatalf("window %d after reset: %v, fresh model %v", i, a, b)
 		}
 	}
 }

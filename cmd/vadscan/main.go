@@ -131,8 +131,8 @@ func scan(path string, t vad.Timing, loudDB float64, minWindows int) error {
 	for _, s := range segs {
 		sumPeak += float64(s.peak)
 	}
-	fmt.Printf("%s: %.1fs, %d segments, mean_peak=%.2f, resets=%d, loud bursts %d, outside segments %d (loud >= %.0f dBFS, >= %d ms)\n",
-		path, sec(n), len(segs), sumPeak/float64(max(1, len(segs))), m.Resets(),
+	fmt.Printf("%s: %.1fs, %d segments, mean_peak=%.2f, loud bursts %d, outside segments %d (loud >= %.0f dBFS, >= %d ms)\n",
+		path, sec(n), len(segs), sumPeak/float64(max(1, len(segs))),
 		len(bursts), len(missed), loudDB, minWindows*vad.WindowMs)
 
 	fmt.Println("segments:")

@@ -37,8 +37,10 @@ speech probability to stderr as a meter.
   PortAudio. Runtime needs a PulseAudio server or PipeWire with its pulse layer
   (`pipewire-pulse`); set `PULSE_SERVER` if it isn't auto-discovered.
 - **Silero VAD is pure Go.** `pkg/vad.Model` wraps
-  [`zserge/govad`](https://github.com/zserge/govad) with the **v5** weights
-  embedded in the binary — no model file, no ONNX Runtime.
+  `pkg/vad/internal/silero` — [`zserge/govad`](https://github.com/zserge/govad)
+  vendored (MIT, licence and source version next to the code) with the 64-sample
+  input context added — and the **v5** weights embedded in the binary — no
+  model file, no ONNX Runtime.
 
 ## Config
 
@@ -165,24 +167,30 @@ output is float32 [-1,1], not int16.
 
 ## Gotchas
 
-- **`Model.Infer` is stateful** (Silero's recurrent state). One `Model` per
-  stream; it is not safe for concurrent use.
-- **`Model` resets its own state in pauses.** After `ResetAfterSilenceMs`
-  (500 ms) of windows below `Threshold − Hysteresis` it calls `govad.Reset`
-  and re-reads the quiet window (warm-up). Without it Silero v5 goes deaf in a
-  long stream (loud words at 0.01–0.2). It keys on probability only, so it
-  also fires in an open segment's release tail — measured harmless. The gate
-  uses the package consts, not a configured `Timing`. Numbers and rejected
-  variants are on the const and the `Model` comment; check a change with
-  `cmd/vadscan` on session recordings.
+- **`Model.Infer` is stateful** (Silero's recurrent state and input context).
+  One `Model` per stream; it is not safe for concurrent use.
+- **Silero v5 needs 64 samples of context; without it the model goes deaf in
+  a stream.** The official wrapper feeds the previous window's last 64 samples
+  + the 512-sample window (576) per call; fed bare 512-sample windows, loud
+  words score 0.01–0.2 after a while (27 of 124 loud bursts missed on a 304 s
+  session; snakers4/silero-vad#771). Both earlier wrappers (silero-vad-onnx-go,
+  upstream govad) made that mistake, and it was masked by resetting the state
+  after every 500 ms pause — removed once the context was added. `Model` now
+  never resets; windows must be consecutive audio.
+  `TestModelMatchesReference` compares a synthetic signal with probabilities
+  from the official implementation (`pkg/vad/testdata`, regeneration steps on
+  the test) — keep it passing; check model changes with `cmd/vadscan` on
+  session recordings.
 - **The timing consts are tuned for Silero v5.** A v6 model scores the same
   audio differently — switching generations means re-tuning
   `pkg/vad/consts.go`, not a drop-in swap. Read the comments there before
   changing anything.
 - **`vad.Timing` zero value is invalid.** Use `vad.DefaultTiming()` or
   `config.VADConfig.ToTiming()`.
-- **`govad` is a small single-author module pinned by pseudo-version**, with no
-  releases. If it disappears, vendor it rather than reintroducing cgo.
+- **`pkg/vad/internal/silero` is vendored code** (zserge/govad
+  v0.0.0-20260330155402-74750eabf3a4, a single-author module with no
+  releases), not a dependency. Local changes are listed in its package comment
+  — keep them minimal and listed; upstream has no context API to go back to.
 - **`audio.Capture.Read()` aliases its internal buffer.** The slice is
   overwritten on the next `Read` — copy before retaining it. `Listen` already
   does.
