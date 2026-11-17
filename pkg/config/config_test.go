@@ -194,3 +194,27 @@ func requireWriteString(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// TestCharsPerSecLimit: absent means the default, an explicit 0 turns the
+// filter off, any other value is taken as is — also for a config built
+// without Load (xcono/voices composes ASRConfig literally).
+func TestCharsPerSecLimit(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name string
+		asr  map[string]any
+		want float64
+	}{
+		{"absent", map[string]any{}, DefaultMaxCharsPerSec},
+		{"zero disables", map[string]any{"max_chars_per_sec": 0}, 0},
+		{"explicit", map[string]any{"max_chars_per_sec": 25.5}, 25.5},
+	} {
+		path := filepath.Join(dir, "config.json")
+		requireWriteJSON(t, path, map[string]any{"asr": c.asr})
+		cfg, err := Load(path)
+		assert.NoError(t, err, c.name)
+		assert.Equal(t, c.want, cfg.ASR.CharsPerSecLimit(), c.name)
+	}
+	var lit ASRConfig
+	assert.Equal(t, float64(DefaultMaxCharsPerSec), lit.CharsPerSecLimit())
+}

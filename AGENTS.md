@@ -49,7 +49,10 @@ Provider defaults to `"gigaam"` in code; the checked-in `config.json` selects
 `"whisper"`. `gigaam` and `whisper` share `asr.Transcriber` (`language`/`prompt`
 are sent only when non-empty); `"elevenlabs"` is `pkg/asr/elevenlabs.go`. All
 three are built by `stt.NewRecognizer` — the one provider switch, shared with
-`xcono/voices`. `README.md` has the parameter tables.
+`xcono/voices`. `asr.max_chars_per_sec` (default 30, `0` off) is a pointer
+field read through `ASRConfig.CharsPerSecLimit()`, so an explicit `0` differs
+from absent and configs composed without `Load` (voices) still get the default.
+`README.md` has the parameter tables.
 
 ## Architecture
 
@@ -65,7 +68,14 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
 - `pkg/asr` — `Listen` (`listen.go`) is the pipeline controller: it owns the
   FSM, preroll ring and utterance buffer, and transcribes in a goroutine so a
   slow recogniser never stalls capture. The channel closes when the source
-  errors or the context is cancelled. Also here: the consumer-side interfaces
+  errors or the context is cancelled. `WithMaxCharsPerSec` (a variadic
+  `ListenOption`, so existing calls compile) drops a transcription whose
+  runes per second of clip exceed the limit — Whisper's subtitle-credit
+  hallucinations — logging `asr: dropped ...`; that turn ends at `SpeechEnd`.
+  `SpeechText` carries `Audio`, `CharsPerSec` and `Segments` for logs. A
+  recogniser implementing the optional `ScoredRecognizer` (`*Transcriber`)
+  supplies `Segments` (verbose_json `no_speech_prob` / `avg_logprob`); scores
+  are logged by `cmd/vox`, never acted on. Also here: the consumer-side interfaces
   `Source`/`Detector`/`Recognizer`, `Transcriber` (batch, OpenAI-compatible
   multipart WAV upload), `ElevenLabs`, and `StreamSession` (WebSocket streaming).
 - `pkg/vad` — `Model`, hysteresis `FSM`, `Preroll` ring, `EndOfTurn` countdown,
@@ -145,6 +155,12 @@ output is float32 [-1,1], not int16.
 - **All providers are batch.** `asr.StreamSession` / `DialStream` and
   `vad.EndOfTurn` are implemented and tested but not wired into `Listen`.
 - **`Event.VoiceFileID` is never set** by the pipeline.
+- **`Transcriber.Verbose` is whisper-only.** The GigaAM server answers 400 to
+  any `response_format` but `json|text`; `NewRecognizer` sets `Verbose` only
+  for `whisper`.
+- **`stt.NewWith` does not filter by default.** Pass
+  `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())`; `stt.New` and `vox` do it
+  from config. `Service.Transcribe` (one-shot) is never filtered.
 - **ElevenLabs needs `elevenlabs.api_key`**, and `stt.NewRecognizer` does not
   validate it — a missing key fails at request time (401), not at startup.
 

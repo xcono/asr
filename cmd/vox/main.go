@@ -82,9 +82,9 @@ func run(cfg *config.Config) error {
 	}()
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
-	fmt.Printf("ASR: %s%s\n", cfg.ASR.Provider, endpoint(rec))
+	fmt.Printf("ASR: %s%s, max %g chars/s\n", cfg.ASR.Provider, endpoint(rec), cfg.ASR.CharsPerSecLimit())
 
-	events := asr.Listen(ctx, mic, det, rec, timing)
+	events := asr.Listen(ctx, mic, det, rec, timing, asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()))
 	for ev := range events {
 		switch ev.Kind {
 		case asr.SpeechStart:
@@ -92,7 +92,11 @@ func run(cfg *config.Config) error {
 		case asr.SpeechEnd:
 			log.Printf("vad: speaking stopped at %s", ev.Timestamp.Format(time.RFC3339Nano))
 		case asr.SpeechText:
-			log.Printf("stt: %q (voice_file_id=%s)", ev.Text, ev.VoiceFileID)
+			// Scores are logged to choose a threshold from live speech; nothing
+			// is dropped by them. Turns over max_chars_per_sec never get here —
+			// Listen logs them as "asr: dropped ...".
+			log.Printf("stt: %q %.2fs %.1f chars/s%s (voice_file_id=%s)",
+				ev.Text, ev.Audio.Seconds(), ev.CharsPerSec, asr.FormatSegments(ev.Segments), ev.VoiceFileID)
 		case asr.SpeechError:
 			log.Printf("asr: pipeline error: %v", ev.Err)
 		}

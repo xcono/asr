@@ -147,7 +147,8 @@ func TestServiceCloseIsIdempotent(t *testing.T) {
 }
 
 // TestRecognizerWhisper checks the facade maps the whisper config section onto
-// the batch client, including the whisper.cpp-only fields.
+// the batch client, including the whisper.cpp-only fields and Verbose (the
+// verbose_json scores cmd/vox logs).
 func TestRecognizerWhisper(t *testing.T) {
 	rec, err := NewRecognizer(config.ASRConfig{
 		Provider: "whisper",
@@ -160,9 +161,21 @@ func TestRecognizerWhisper(t *testing.T) {
 	if !ok {
 		t.Fatalf("recognizer type = %T, want *asr.Transcriber", rec)
 	}
-	want := asr.Transcriber{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p"}
+	want := asr.Transcriber{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p", Verbose: true}
 	if *tr != want {
 		t.Fatalf("transcriber = %+v, want %+v", *tr, want)
+	}
+}
+
+// TestRecognizerGigaAMPlainJSON: GigaAM's server answers 400 to any format but
+// json|text, so its client must never ask for verbose_json.
+func TestRecognizerGigaAMPlainJSON(t *testing.T) {
+	rec, err := NewRecognizer(config.ASRConfig{Provider: "gigaam", GigaAM: config.GigaAMConfig{BaseURL: "http://g"}})
+	if err != nil {
+		t.Fatalf("NewRecognizer: %v", err)
+	}
+	if tr, ok := rec.(*asr.Transcriber); !ok || tr.Verbose {
+		t.Fatalf("recognizer = %+v, want a *asr.Transcriber without Verbose", rec)
 	}
 }
 

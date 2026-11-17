@@ -30,10 +30,29 @@ type VADConfig struct {
 
 // ASRConfig holds the speech-to-text provider configuration.
 type ASRConfig struct {
-	Provider   string           `json:"provider"` // "gigaam", "whisper" or "elevenlabs"
-	GigaAM     GigaAMConfig     `json:"gigaam"`
-	Whisper    WhisperConfig    `json:"whisper"`
-	ElevenLabs ElevenLabsConfig `json:"elevenlabs"`
+	Provider string `json:"provider"` // "gigaam", "whisper" or "elevenlabs"
+	// MaxCharsPerSec drops a live transcription whose text rate (runes per
+	// second of submitted audio) exceeds it — Whisper's subtitle-credit
+	// hallucinations on short unclear sounds (see asr.WithMaxCharsPerSec).
+	// A pointer so an explicit 0 (filter off) differs from "absent"; read it
+	// through CharsPerSecLimit, which also covers configs built without Load.
+	MaxCharsPerSec *float64         `json:"max_chars_per_sec"`
+	GigaAM         GigaAMConfig     `json:"gigaam"`
+	Whisper        WhisperConfig    `json:"whisper"`
+	ElevenLabs     ElevenLabsConfig `json:"elevenlabs"`
+}
+
+// DefaultMaxCharsPerSec sits well above real speech (15–18 runes/s, a lone
+// "Да." 4–9/s) and below the observed hallucination (~44/s).
+const DefaultMaxCharsPerSec = 30
+
+// CharsPerSecLimit is the effective rate limit: MaxCharsPerSec when set
+// (0 disables the filter), DefaultMaxCharsPerSec when absent.
+func (c *ASRConfig) CharsPerSecLimit() float64 {
+	if c.MaxCharsPerSec == nil {
+		return DefaultMaxCharsPerSec
+	}
+	return *c.MaxCharsPerSec
 }
 
 // GigaAMConfig holds configuration for the local GigaAM batch STT server.

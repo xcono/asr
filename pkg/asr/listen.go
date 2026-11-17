@@ -2,9 +2,13 @@ package asr
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"log"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xcono/asr/pkg/vad"
 )
@@ -60,12 +64,40 @@ func (k EventKind) String() string {
 // Err is set only for SpeechError. Timestamp records when the event was
 // created, and VoiceFileID associates the transcription with an audio
 // recording file (if any).
+//
+// Audio, CharsPerSec and Segments are diagnostics for SpeechText, kept so a
+// log can show why a turn passed the rate filter; consumers may ignore them.
 type Event struct {
 	Kind        EventKind
 	Text        string
 	Timestamp   time.Time
 	VoiceFileID string
 	Err         error // populated for SpeechError
+
+	Audio       time.Duration // length of the clip sent to the recogniser (preroll included)
+	CharsPerSec float64       // runes of the trimmed Text per second of Audio
+	Segments    []Segment     // recogniser scores; nil unless it implements ScoredRecognizer
+}
+
+// ListenOption tunes Listen. The zero set (no options) is the pipeline as it
+// was before options existed: every non-empty transcription is emitted.
+type ListenOption func(*listenOptions)
+
+type listenOptions struct {
+	maxCharsPerSec float64
+}
+
+// WithMaxCharsPerSec drops a transcription whose text rate — runes of the
+// trimmed text per second of submitted audio — exceeds limit; 0 (or less)
+// disables the check. It exists because Whisper, given a short unclear sound,
+// hallucinates subtitle credits from its training data ("Редактор субтитров
+// А.Семкин Корректор А.Егорова": 47 runes from 0.77 s of speech, ~44/s over
+// the clip with preroll), while real speech runs at 15–18/s and a lone
+// "Да." at 4–9/s. A count of speech windows was rejected as the gate: it
+// cannot tell such a burst from a genuine "Да". The dropped turn is logged,
+// never emitted, so its SpeechEnd is the last event of that turn.
+func WithMaxCharsPerSec(limit float64) ListenOption {
+	return func(o *listenOptions) { o.maxCharsPerSec = limit }
 }
 
 // Listen runs the capture → VAD → segment → transcribe turn pipeline and returns
@@ -75,7 +107,11 @@ type Event struct {
 // recogniser never stalls capture. The channel closes when src is exhausted (its
 // Read errors) or ctx is cancelled. This is the ASR domain's "controller": act
 // consumes it; it knows nothing about act.
-func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad.Timing) <-chan Event {
+func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad.Timing, opts ...ListenOption) <-chan Event {
+	var o listenOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	out := make(chan Event)
 
 	go func() {
@@ -128,17 +164,64 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 				clip := utter
 				utter = nil
 				wg.Go(func() {
-					text, err := rec.Transcribe(ctx, clip, vad.SampleRate)
-					if err != nil || text == "" {
+					tr, err := transcribe(ctx, rec, clip)
+					if err != nil || tr.Text == "" {
 						return // skip silent/failed turns
 					}
-					emit(ctx, out, Event{Kind: SpeechText, Text: text, Timestamp: time.Now()})
+					ev := Event{
+						Kind:     SpeechText,
+						Text:     tr.Text,
+						Audio:    time.Duration(len(clip)) * time.Second / vad.SampleRate,
+						Segments: tr.Segments,
+					}
+					ev.CharsPerSec = charsPerSec(ev.Text, ev.Audio)
+					if o.maxCharsPerSec > 0 && ev.CharsPerSec > o.maxCharsPerSec {
+						log.Printf("asr: dropped %q: %.2fs, %.1f chars/s > %g%s",
+							ev.Text, ev.Audio.Seconds(), ev.CharsPerSec, o.maxCharsPerSec, FormatSegments(ev.Segments))
+						return
+					}
+					ev.Timestamp = time.Now()
+					emit(ctx, out, ev)
 				})
 			}
 		}
 	}()
 
 	return out
+}
+
+// transcribe asks rec for the text and, when it can give them, the scores.
+func transcribe(ctx context.Context, rec Recognizer, clip []int16) (Transcript, error) {
+	if sr, ok := rec.(ScoredRecognizer); ok {
+		return sr.TranscribeScored(ctx, clip, vad.SampleRate)
+	}
+	text, err := rec.Transcribe(ctx, clip, vad.SampleRate)
+	return Transcript{Text: text}, err
+}
+
+// charsPerSec is the text rate the hallucination filter compares: runes, not
+// bytes, so Cyrillic counts the same as Latin.
+func charsPerSec(text string, d time.Duration) float64 {
+	if d <= 0 {
+		return 0
+	}
+	return float64(utf8.RuneCountInString(strings.TrimSpace(text))) / d.Seconds()
+}
+
+// FormatSegments renders scores for a log line as
+// " no_speech=0.012,0.012 logprob=-0.31,-0.45" (one value per segment), or ""
+// when there are none, so a line for a scoreless provider stays as it was.
+func FormatSegments(segs []Segment) string {
+	if len(segs) == 0 {
+		return ""
+	}
+	ns := make([]string, len(segs))
+	lp := make([]string, len(segs))
+	for i, s := range segs {
+		ns[i] = fmt.Sprintf("%.3f", s.NoSpeechProb)
+		lp[i] = fmt.Sprintf("%.2f", s.AvgLogprob)
+	}
+	return " no_speech=" + strings.Join(ns, ",") + " logprob=" + strings.Join(lp, ",")
 }
 
 // emit sends e unless ctx is cancelled, so a stalled consumer plus cancellation

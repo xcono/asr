@@ -85,22 +85,33 @@ func New(cfg *config.Config) (*Service, error) {
 		mic.Close,
 		model.Close,
 	}
-	return start(rec, mic, model, cfg.VAD.ToTiming(), closers), nil
+	return start(rec, mic, model, cfg.VAD.ToTiming(), closers,
+		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit())), nil
 }
+
+// ListenOption tunes the pipeline NewWith starts; aliased from pkg/asr so a
+// consumer needs only this package.
+type ListenOption = asr.ListenOption
+
+// WithMaxCharsPerSec drops live transcriptions faster than limit runes per
+// second of audio (0 disables); see asr.WithMaxCharsPerSec. New applies
+// config.ASRConfig.CharsPerSecLimit itself; NewWith filters only when given it.
+func WithMaxCharsPerSec(limit float64) ListenOption { return asr.WithMaxCharsPerSec(limit) }
 
 // NewWith starts a pipeline over caller-supplied components and owns none of
 // them — the caller closes src/det. Use it in tests (scripted Source/Detector,
 // no mic) or when ../voices already owns the audio device and
 // feeds STT from a shared source. Timing comes from config.VADConfig.ToTiming
-// or vad.DefaultTiming.
-func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing) *Service {
-	return start(rec, src, det, t, nil)
+// or vad.DefaultTiming. Without opts every transcription is emitted; pass
+// WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()) to filter as New does.
+func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing, opts ...ListenOption) *Service {
+	return start(rec, src, det, t, nil, opts...)
 }
 
 // start wires asr.Listen and the event forwarder. The forwarder is the single
 // place the atomic speaking flag is updated, keeping IsSpeaking consistent with
 // the event stream a consumer sees.
-func start(rec asr.Recognizer, src asr.Source, det asr.Detector, t vad.Timing, closers []func() error) *Service {
+func start(rec asr.Recognizer, src asr.Source, det asr.Detector, t vad.Timing, closers []func() error, opts ...ListenOption) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		out:     make(chan Event),
@@ -110,7 +121,7 @@ func start(rec asr.Recognizer, src asr.Source, det asr.Detector, t vad.Timing, c
 		done:    make(chan struct{}),
 		closers: closers,
 	}
-	go s.forward(asr.Listen(ctx, src, det, rec, t))
+	go s.forward(asr.Listen(ctx, src, det, rec, t, opts...))
 	return s
 }
 
@@ -147,7 +158,8 @@ func (s *Service) IsSpeaking() bool { return s.speaking.Load() }
 
 // Transcribe runs a one-shot batch transcription of 16 kHz mono PCM (Batch),
 // reusing the configured provider. Independent of the live capture stream — for
-// transcribing a clip on demand.
+// transcribing a clip on demand. The chars-per-second filter does not apply:
+// the caller chose the clip, so there is no VAD burst to guard against.
 func (s *Service) Transcribe(ctx context.Context, pcm []int16) (string, error) {
 	return s.rec.Transcribe(ctx, pcm, vad.SampleRate)
 }
@@ -180,7 +192,9 @@ func NewRecognizer(c config.ASRConfig) (asr.Recognizer, error) {
 		return &asr.Transcriber{BaseURL: c.GigaAM.BaseURL, Model: c.GigaAM.Model}, nil
 	case "whisper":
 		w := c.Whisper
-		return &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt}, nil
+		// Verbose: verbose_json carries the no_speech_prob / avg_logprob scores
+		// cmd/vox logs. GigaAM stays on plain json — its server rejects others.
+		return &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt, Verbose: true}, nil
 	case "elevenlabs":
 		return &asr.ElevenLabs{
 			APIKey:       c.ElevenLabs.APIKey,

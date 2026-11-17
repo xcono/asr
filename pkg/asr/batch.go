@@ -34,7 +34,38 @@ type Transcriber struct {
 	// decoder context, which steers the spelling of terms toward the prompt's
 	// forms; it does not reliably fix misheard words on short clips.
 	Prompt string
-	Client *http.Client // nil => a client with DefaultTimeout
+	// Verbose asks for response_format=verbose_json (plus
+	// no_language_probabilities=true, which spares whisper.cpp an extra
+	// language-detection pass it would otherwise run for that format), so the
+	// reply carries per-segment no_speech_prob / avg_logprob for the log. Only
+	// whisper.cpp sets it: the GigaAM server rejects any format but json|text
+	// with HTTP 400.
+	Verbose bool
+	Client  *http.Client // nil => a client with DefaultTimeout
+}
+
+// Segment holds the confidence scores whisper.cpp reports for one decoded
+// segment of a verbose_json reply. They are logged, not acted on: no threshold
+// has been chosen yet. NoSpeechProb is computed once per decoding window, so
+// every segment of a short utterance carries the same value.
+type Segment struct {
+	NoSpeechProb float64 `json:"no_speech_prob"`
+	AvgLogprob   float64 `json:"avg_logprob"`
+}
+
+// Transcript is a recognised utterance plus whatever scores the server sent.
+// Segments is nil for a plain json reply or a server without verbose_json.
+type Transcript struct {
+	Text     string
+	Segments []Segment
+}
+
+// ScoredRecognizer is the optional extension of Recognizer that also returns
+// the server's scores. Listen uses it when the recogniser implements it, so
+// Recognizer itself — and every implementation outside this package — stays
+// unchanged.
+type ScoredRecognizer interface {
+	TranscribeScored(ctx context.Context, samples []int16, rate int) (Transcript, error)
 }
 
 // DefaultTimeout caps a single Transcribe HTTP request so a hung STT server
@@ -45,18 +76,30 @@ const DefaultTimeout = 30 * time.Second
 // Transcribe encodes the samples as a WAV clip and POSTs them as a multipart
 // upload to {BaseURL}/audio/transcriptions, returning the recognised text.
 func (tr *Transcriber) Transcribe(ctx context.Context, samples []int16, rate int) (string, error) {
+	t, err := tr.TranscribeScored(ctx, samples, rate)
+	return t.Text, err
+}
+
+// TranscribeScored is Transcribe plus the per-segment scores of a verbose_json
+// reply (see Verbose). A reply without "segments" decodes to nil Segments.
+func (tr *Transcriber) TranscribeScored(ctx context.Context, samples []int16, rate int) (Transcript, error) {
 	wav := audio.EncodeWAV(samples, rate)
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	fw, err := mw.CreateFormFile("file", "audio.wav")
 	if err != nil {
-		return "", err
+		return Transcript{}, err
 	}
 	if _, err := fw.Write(wav); err != nil {
-		return "", err
+		return Transcript{}, err
 	}
-	_ = mw.WriteField("response_format", "json")
+	if tr.Verbose {
+		_ = mw.WriteField("response_format", "verbose_json")
+		_ = mw.WriteField("no_language_probabilities", "true")
+	} else {
+		_ = mw.WriteField("response_format", "json")
+	}
 	if tr.Model != "" {
 		_ = mw.WriteField("model", tr.Model)
 	}
@@ -67,13 +110,13 @@ func (tr *Transcriber) Transcribe(ctx context.Context, samples []int16, rate int
 		_ = mw.WriteField("prompt", tr.Prompt)
 	}
 	if err := mw.Close(); err != nil {
-		return "", err
+		return Transcript{}, err
 	}
 
 	url := strings.TrimRight(tr.BaseURL, "/") + "/audio/transcriptions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
 	if err != nil {
-		return "", err
+		return Transcript{}, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
@@ -83,22 +126,23 @@ func (tr *Transcriber) Transcribe(ctx context.Context, samples []int16, rate int
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return Transcript{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("asr: status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return Transcript{}, fmt.Errorf("asr: status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
 	var out struct {
-		Text string `json:"text"`
+		Text     string    `json:"text"`
+		Segments []Segment `json:"segments"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("asr: decode response: %w", err)
+		return Transcript{}, fmt.Errorf("asr: decode response: %w", err)
 	}
-	return oneLine(out.Text), nil
+	return Transcript{Text: oneLine(out.Text), Segments: out.Segments}, nil
 }
 
 // oneLine flattens a transcript to a single line. whisper.cpp ends every

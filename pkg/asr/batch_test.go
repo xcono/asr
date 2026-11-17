@@ -134,3 +134,70 @@ func TestTranscribeFlattensSegments(t *testing.T) {
 		}
 	}
 }
+
+// TestTranscribeVerboseFields: Verbose asks for verbose_json and skips the
+// language-probability pass; without it the form says json (GigaAM's only
+// accepted structured format).
+func TestTranscribeVerboseFields(t *testing.T) {
+	got, _ := formFields(t, "ok", &Transcriber{Verbose: true})
+	if v := got["response_format"]; len(v) != 1 || v[0] != "verbose_json" {
+		t.Fatalf("response_format = %v, want [verbose_json]", v)
+	}
+	if v := got["no_language_probabilities"]; len(v) != 1 || v[0] != "true" {
+		t.Fatalf("no_language_probabilities = %v, want [true]", v)
+	}
+
+	got, _ = formFields(t, "ok", &Transcriber{})
+	if v := got["response_format"]; len(v) != 1 || v[0] != "json" {
+		t.Fatalf("response_format = %v, want [json]", v)
+	}
+	if _, ok := got["no_language_probabilities"]; ok {
+		t.Fatal("no_language_probabilities sent without Verbose")
+	}
+}
+
+// scoredReply serves body verbatim and returns what TranscribeScored decoded.
+func scoredReply(t *testing.T, body string) Transcript {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	tr := &Transcriber{BaseURL: srv.URL + "/v1", Verbose: true}
+	got, err := tr.TranscribeScored(context.Background(), []int16{1, 2, 3, 4}, 16000)
+	if err != nil {
+		t.Fatalf("TranscribeScored: %v", err)
+	}
+	return got
+}
+
+// TestTranscribeScoredParsesSegments: a whisper.cpp verbose_json reply keeps
+// the full top-level text and every segment's scores.
+func TestTranscribeScoredParsesSegments(t *testing.T) {
+	got := scoredReply(t, `{
+		"task": "transcribe", "language": "russian", "duration": 1.1,
+		"text": " Редактор субтитров А.Семкин\n Корректор А.Егорова\n",
+		"segments": [
+			{"id": 0, "text": " Редактор субтитров А.Семкин", "avg_logprob": -0.61, "no_speech_prob": 0.42,
+			 "words": [{"word": " Редактор", "probability": 0.3}]},
+			{"id": 1, "text": " Корректор А.Егорова", "avg_logprob": -0.48, "no_speech_prob": 0.42}
+		]
+	}`)
+	if want := "Редактор субтитров А.Семкин Корректор А.Егорова"; got.Text != want {
+		t.Fatalf("text = %q, want %q", got.Text, want)
+	}
+	want := []Segment{{NoSpeechProb: 0.42, AvgLogprob: -0.61}, {NoSpeechProb: 0.42, AvgLogprob: -0.48}}
+	if len(got.Segments) != len(want) || got.Segments[0] != want[0] || got.Segments[1] != want[1] {
+		t.Fatalf("segments = %+v, want %+v", got.Segments, want)
+	}
+}
+
+// TestTranscribeScoredWithoutSegments: a plain json reply (GigaAM, or a server
+// ignoring verbose_json) decodes without error and without scores.
+func TestTranscribeScoredWithoutSegments(t *testing.T) {
+	got := scoredReply(t, `{"text": "привет мир"}`)
+	if got.Text != "привет мир" || got.Segments != nil {
+		t.Fatalf("got %+v, want text only", got)
+	}
+}

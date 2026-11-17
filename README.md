@@ -73,6 +73,7 @@ has a default, so `{}` is a valid config.
   },
   "asr": {
     "provider": "whisper",
+    "max_chars_per_sec": 30,
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
     "whisper": { "base_url": "http://localhost:8008/v1", "model": "", "language": "ru", "prompt": "" },
     "elevenlabs": { "api_key": "", "model": "", "language_code": "", "base_url": "" }
@@ -106,6 +107,31 @@ All providers are batch: each VAD-segmented utterance is sent as one request.
   that steers spelling of terms) are sent only when non-empty.
 - **elevenlabs** — cloud ElevenLabs Scribe (`/v1/speech-to-text`, default model
   `scribe_v2`). Needs `api_key`; `language_code` is an optional hint.
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `provider` | `gigaam` | `gigaam`, `whisper` or `elevenlabs` |
+| `max_chars_per_sec` | 30 | Drop a live transcription faster than this many characters per second of submitted audio (preroll included); `0` disables |
+
+The rate filter targets Whisper's hallucinated subtitle credits on short
+unclear sounds (~44 chars/s observed) while real speech runs at 15–18 chars/s
+and a lone "Да." at 4–9. A dropped turn is logged as
+`asr: dropped "<text>": <sec>s, <rate> chars/s > <limit>` and produces
+`SpeechEnd` with no `SpeechText`. `stt.New` and `vox` apply it; `stt.NewWith`
+filters only when passed `stt.WithMaxCharsPerSec(...)`; the one-shot
+`Service.Transcribe` never filters.
+
+For `whisper` the client requests `response_format=verbose_json` (with
+`no_language_probabilities=true`) and `vox` logs each turn as
+
+```
+stt: "<text>" 1.23s 8.1 chars/s no_speech=0.012 logprob=-0.31 (voice_file_id=)
+```
+
+with one comma-separated `no_speech` / `logprob` value per segment. The scores
+are only logged — nothing is dropped by them yet. GigaAM stays on plain `json`
+(its server rejects other formats) and ElevenLabs returns no scores; their
+lines omit both fields.
 
 ## STT servers
 
