@@ -83,20 +83,25 @@ func run(cfg *config.Config) error {
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
 	fmt.Printf("ASR: %s%s, max %g chars/s\n", cfg.ASR.Provider, endpoint(rec), cfg.ASR.CharsPerSecLimit())
+	if d := cfg.ASR.DumpDroppedDir; d != "" {
+		fmt.Printf("dropped clips -> %s\n", d)
+	}
 
-	events := asr.Listen(ctx, mic, det, rec, timing, asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()))
+	events := asr.Listen(ctx, mic, det, rec, timing,
+		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()),
+		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir))
 	for ev := range events {
 		switch ev.Kind {
 		case asr.SpeechStart:
 			log.Printf("vad: speaking started at %s", ev.Timestamp.Format(time.RFC3339Nano))
 		case asr.SpeechEnd:
-			log.Printf("vad: speaking stopped at %s", ev.Timestamp.Format(time.RFC3339Nano))
+			log.Printf("vad: speaking stopped at %s%s", ev.Timestamp.Format(time.RFC3339Nano), ev.VAD)
 		case asr.SpeechText:
 			// Scores are logged to choose a threshold from live speech; nothing
 			// is dropped by them. Turns over max_chars_per_sec never get here —
 			// Listen logs them as "asr: dropped ...".
-			log.Printf("stt: %q %.2fs %.1f chars/s%s (voice_file_id=%s)",
-				ev.Text, ev.Audio.Seconds(), ev.CharsPerSec, asr.FormatSegments(ev.Segments), ev.VoiceFileID)
+			log.Printf("stt: %q %.2fs %.1f chars/s%s%s (voice_file_id=%s)",
+				ev.Text, ev.Audio.Seconds(), ev.CharsPerSec, ev.VAD, asr.FormatSegments(ev.Segments), ev.VoiceFileID)
 		case asr.SpeechError:
 			log.Printf("asr: pipeline error: %v", ev.Err)
 		}

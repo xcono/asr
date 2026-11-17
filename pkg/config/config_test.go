@@ -41,6 +41,19 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.ASR.Whisper.Prompt)
 	assert.Empty(t, cfg.ASR.ElevenLabs.APIKey)
 	assert.Empty(t, cfg.ASR.ElevenLabs.Model)
+	assert.Empty(t, cfg.ASR.DumpDroppedDir, "dumping dropped clips is off by default")
+}
+
+// TestLoad_DumpDroppedDir: the field is read as given, independent of vad.debug.
+func TestLoad_DumpDroppedDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	requireWriteJSON(t, path, map[string]any{
+		"vad": map[string]any{"debug": false},
+		"asr": map[string]any{"dump_dropped_dir": "dropped"},
+	})
+	cfg, err := Load(path)
+	assert.NoError(t, err)
+	assert.Equal(t, "dropped", cfg.ASR.DumpDroppedDir)
 }
 
 func TestLoad_FullConfig(t *testing.T) {

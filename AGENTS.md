@@ -52,7 +52,9 @@ three are built by `stt.NewRecognizer` — the one provider switch, shared with
 `xcono/voices`. `asr.max_chars_per_sec` (default 30, `0` off) is a pointer
 field read through `ASRConfig.CharsPerSecLimit()`, so an explicit `0` differs
 from absent and configs composed without `Load` (voices) still get the default.
-`README.md` has the parameter tables.
+`asr.dump_dropped_dir` (default `""`, off) saves each clip the rate filter
+drops as a WAV; the checked-in `config.json` sets `"dropped"` (git-ignored).
+It is independent of `vad.debug`. `README.md` has the parameter tables.
 
 ## Architecture
 
@@ -72,7 +74,13 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
   `ListenOption`, so existing calls compile) drops a transcription whose
   runes per second of clip exceed the limit — Whisper's subtitle-credit
   hallucinations — logging `asr: dropped ...`; that turn ends at `SpeechEnd`.
-  `SpeechText` carries `Audio`, `CharsPerSec` and `Segments` for logs. A
+  `SpeechText` carries `Audio`, `CharsPerSec` and `Segments` for logs;
+  `SpeechEnd` and `SpeechText` carry `VAD` (`VADStats`: peak probability and
+  windows >= `Threshold` out of all windows of the clip, preroll included —
+  a parallel probability ring mirrors the preroll, so it assumes one window
+  per `Source.Read`). `WithDumpDropped(dir)` writes a dropped clip to
+  `dir/dropped-<time>.wav` from the transcription goroutine, never the
+  capture loop; a write error is logged and ignored. A
   recogniser implementing the optional `ScoredRecognizer` (`*Transcriber`)
   supplies `Segments` (verbose_json `no_speech_prob` / `avg_logprob`); scores
   are logged by `cmd/vox`, never acted on. Also here: the consumer-side interfaces
@@ -158,8 +166,9 @@ output is float32 [-1,1], not int16.
 - **`Transcriber.Verbose` is whisper-only.** The GigaAM server answers 400 to
   any `response_format` but `json|text`; `NewRecognizer` sets `Verbose` only
   for `whisper`.
-- **`stt.NewWith` does not filter by default.** Pass
-  `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())`; `stt.New` and `vox` do it
+- **`stt.NewWith` does not filter or dump by default.** Pass
+  `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` and
+  `stt.WithDumpDropped(cfg.DumpDroppedDir)`; `stt.New` and `vox` do both
   from config. `Service.Transcribe` (one-shot) is never filtered.
 - **ElevenLabs needs `elevenlabs.api_key`**, and `stt.NewRecognizer` does not
   validate it — a missing key fails at request time (401), not at startup.

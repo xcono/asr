@@ -86,7 +86,8 @@ func New(cfg *config.Config) (*Service, error) {
 		model.Close,
 	}
 	return start(rec, mic, model, cfg.VAD.ToTiming(), closers,
-		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit())), nil
+		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()),
+		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir)), nil
 }
 
 // ListenOption tunes the pipeline NewWith starts; aliased from pkg/asr so a
@@ -98,12 +99,18 @@ type ListenOption = asr.ListenOption
 // config.ASRConfig.CharsPerSecLimit itself; NewWith filters only when given it.
 func WithMaxCharsPerSec(limit float64) ListenOption { return asr.WithMaxCharsPerSec(limit) }
 
+// WithDumpDropped saves each clip WithMaxCharsPerSec drops to dir as a WAV
+// ("" disables); see asr.WithDumpDropped. New applies
+// config.ASRConfig.DumpDroppedDir itself; NewWith dumps only when given it.
+func WithDumpDropped(dir string) ListenOption { return asr.WithDumpDropped(dir) }
+
 // NewWith starts a pipeline over caller-supplied components and owns none of
 // them — the caller closes src/det. Use it in tests (scripted Source/Detector,
 // no mic) or when ../voices already owns the audio device and
 // feeds STT from a shared source. Timing comes from config.VADConfig.ToTiming
 // or vad.DefaultTiming. Without opts every transcription is emitted; pass
-// WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()) to filter as New does.
+// WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()) to filter as New does, and
+// WithDumpDropped(cfg.ASR.DumpDroppedDir) to save what it drops.
 func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing, opts ...ListenOption) *Service {
 	return start(rec, src, det, t, nil, opts...)
 }

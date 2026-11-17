@@ -74,6 +74,7 @@ has a default, so `{}` is a valid config.
   "asr": {
     "provider": "whisper",
     "max_chars_per_sec": 30,
+    "dump_dropped_dir": "dropped",
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
     "whisper": { "base_url": "http://localhost:8008/v1", "model": "", "language": "ru", "prompt": "" },
     "elevenlabs": { "api_key": "", "model": "", "language_code": "", "base_url": "" }
@@ -112,20 +113,36 @@ All providers are batch: each VAD-segmented utterance is sent as one request.
 |-----------|---------|---------|
 | `provider` | `gigaam` | `gigaam`, `whisper` or `elevenlabs` |
 | `max_chars_per_sec` | 30 | Drop a live transcription faster than this many characters per second of submitted audio (preroll included); `0` disables |
+| `dump_dropped_dir` | `""` | Save each dropped clip here as a 16 kHz mono 16-bit WAV (created if missing; relative to the working directory); `""` disables. The checked-in `config.json` uses `dropped/`, which git ignores |
 
 The rate filter targets Whisper's hallucinated subtitle credits on short
 unclear sounds (~44 chars/s observed) while real speech runs at 15–18 chars/s
 and a lone "Да." at 4–9. A dropped turn is logged as
-`asr: dropped "<text>": <sec>s, <rate> chars/s > <limit>` and produces
-`SpeechEnd` with no `SpeechText`. `stt.New` and `vox` apply it; `stt.NewWith`
-filters only when passed `stt.WithMaxCharsPerSec(...)`; the one-shot
-`Service.Transcribe` never filters.
+
+```
+asr: dropped "<text>": 1.18s, 39.7 chars/s > 30 vad_peak=0.62 speech_win=6/37 no_speech=0.612 logprob=-1.20 wav=dropped/dropped-20261118-034512.345.wav
+```
+
+and produces `SpeechEnd` with no `SpeechText`. `wav=` appears only when
+`dump_dropped_dir` is set and the write succeeded (a failure is logged as
+`asr: dump dropped clip: <err>` and the pipeline carries on). The time in
+the file name is taken just before the line is logged, so it matches the log
+timestamp. Listen to these clips to learn what opened the segment. `stt.New` and `vox` apply the filter and the dump;
+`stt.NewWith` does each only when passed `stt.WithMaxCharsPerSec(...)` /
+`stt.WithDumpDropped(...)`; the one-shot `Service.Transcribe` never filters.
+
+`vad_peak` is Silero's highest window probability in the clip and
+`speech_win` the windows at or above `threshold` out of all its 32 ms windows
+(preroll included). A short non-speech sound that opened a segment shows a few
+speech windows out of ~30; speech fills most of the clip. The same two fields
+end `vox`'s `vad: speaking stopped at ...` line, so turns with an empty or
+failed transcription show them too.
 
 For `whisper` the client requests `response_format=verbose_json` (with
 `no_language_probabilities=true`) and `vox` logs each turn as
 
 ```
-stt: "<text>" 1.23s 8.1 chars/s no_speech=0.012 logprob=-0.31 (voice_file_id=)
+stt: "<text>" 1.23s 8.1 chars/s vad_peak=0.97 speech_win=28/39 no_speech=0.012 logprob=-0.31 (voice_file_id=)
 ```
 
 with one comma-separated `no_speech` / `logprob` value per segment. The scores

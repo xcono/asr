@@ -36,7 +36,13 @@ type ASRConfig struct {
 	// hallucinations on short unclear sounds (see asr.WithMaxCharsPerSec).
 	// A pointer so an explicit 0 (filter off) differs from "absent"; read it
 	// through CharsPerSecLimit, which also covers configs built without Load.
-	MaxCharsPerSec *float64         `json:"max_chars_per_sec"`
+	MaxCharsPerSec *float64 `json:"max_chars_per_sec"`
+	// DumpDroppedDir, when set, saves the clip of each transcription the rate
+	// filter drops there as a WAV, so the sound that opened a false segment
+	// can be listened to (see asr.WithDumpDropped). "" (default) disables it.
+	// Independent of vad.debug: the meter floods stderr, the dump should not
+	// need it. A relative path resolves against the working directory.
+	DumpDroppedDir string           `json:"dump_dropped_dir"`
 	GigaAM         GigaAMConfig     `json:"gigaam"`
 	Whisper        WhisperConfig    `json:"whisper"`
 	ElevenLabs     ElevenLabsConfig `json:"elevenlabs"`

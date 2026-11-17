@@ -10,6 +10,7 @@
   },
   "asr": {
     "provider": "whisper",
+    "dump_dropped_dir": "dropped",
     "gigaam": {
       "base_url": "http://localhost:8008/v1",
       "model": ""

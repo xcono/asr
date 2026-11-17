@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/xcono/asr/pkg/audio"
 	"github.com/xcono/asr/pkg/vad"
 )
 
@@ -248,5 +252,172 @@ func TestFormatSegments(t *testing.T) {
 	got := FormatSegments([]Segment{{0.0123, -0.314}, {0.0123, -0.449}})
 	if want := " no_speech=0.012,0.012 logprob=-0.31,-0.45"; got != want {
 		t.Errorf("FormatSegments = %q, want %q", got, want)
+	}
+}
+
+// clipRecognizer records the length of the clip it was given.
+type clipRecognizer struct {
+	text string
+	got  chan int
+}
+
+func (r clipRecognizer) Transcribe(_ context.Context, s []int16, _ int) (string, error) {
+	r.got <- len(s)
+	return r.text, nil
+}
+
+// TestListenVADStats: the stats cover exactly the clip's windows — preroll
+// included, earlier windows not — and count only windows at or above
+// Threshold. The probabilities are built from Timing so they survive const
+// changes.
+func TestListenVADStats(t *testing.T) {
+	tm := vad.DefaultTiming()
+	pre := tm.PrerollSamples() / vad.Window
+	if tm.OnsetWindows() != 2 || pre < 4 {
+		t.Fatalf("script assumes a 2-window onset and a preroll of >= 4 windows, got %d, %d", tm.OnsetWindows(), pre)
+	}
+	dead := tm.Threshold - tm.Hysteresis/2 // between the gates: neither speech nor silence
+
+	probs := []float32{0.99} // speech, but pushed out of the preroll below
+	for range pre + 2 {
+		probs = append(probs, 0)
+	}
+	probs = append(probs, tm.Threshold, 0.95) // onset confirmed on 0.95
+	probs = append(probs, dead, 0.6)
+	for range tm.ReleaseWindows() + 3 {
+		probs = append(probs, 0)
+	}
+
+	src := &fakeSource{frames: len(probs), buf: make([]int16, vad.Window)}
+	rec := clipRecognizer{text: "да", got: make(chan int, 1)}
+	got := collectEvents(Listen(context.Background(), src, &fakeDetector{probs: probs}, rec, tm), 2*time.Second)
+
+	if len(got) != 3 || got[1].Kind != SpeechEnd || got[2].Kind != SpeechText {
+		t.Fatalf("got %+v, want start,end,text", got)
+	}
+	clip := <-rec.got
+	want := VADStats{
+		Peak:    0.95,
+		Speech:  3, // Threshold, 0.95, 0.6
+		Windows: pre + 2 + tm.ReleaseWindows(),
+	}
+	if want.Windows*vad.Window != clip {
+		t.Fatalf("clip = %d samples, want %d windows (test arithmetic)", clip, want.Windows)
+	}
+	for _, i := range []int{1, 2} {
+		if got[i].VAD != want {
+			t.Errorf("%v VAD = %+v, want %+v", got[i].Kind, got[i].VAD, want)
+		}
+	}
+	if got[0].VAD != (VADStats{}) {
+		t.Errorf("SpeechStart VAD = %+v, want zero", got[0].VAD)
+	}
+	if s, w := want.String(), " vad_peak=0.95 speech_win=3/"; len(s) <= len(w) || s[:len(w)] != w {
+		t.Errorf("String() = %q, want prefix %q", s, w)
+	}
+	if s := (VADStats{}).String(); s != "" {
+		t.Errorf("zero String() = %q, want empty", s)
+	}
+}
+
+// listenDump runs one scripted turn with a fast (dropped) or slow (kept) text
+// and the dump option, and returns its events and the clip length.
+func listenDump(text string, opts ...ListenOption) ([]Event, int) {
+	probs := speechThenSilence()
+	buf := make([]int16, vad.Window)
+	for i := range buf {
+		buf[i] = int16(i - vad.Window/2)
+	}
+	src := &fakeSource{frames: len(probs), buf: buf}
+	rec := clipRecognizer{text: text, got: make(chan int, 1)}
+	opts = append([]ListenOption{WithMaxCharsPerSec(30)}, opts...)
+	got := collectEvents(Listen(context.Background(), src, &fakeDetector{probs: probs}, rec, vad.DefaultTiming(), opts...), 2*time.Second)
+	return got, <-rec.got
+}
+
+// TestListenDumpsDropped: a dropped turn leaves one valid 16 kHz WAV of the
+// clip sent to the recogniser, in a directory created on demand.
+func TestListenDumpsDropped(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dropped")
+	got, clip := listenDump(credits+" "+credits, WithDumpDropped(dir))
+	if len(got) != 2 || got[1].Kind != SpeechEnd {
+		t.Fatalf("got %+v, want start,end", got)
+	}
+
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("ReadDir = %v, %v; want one file", files, err)
+	}
+	name := files[0].Name()
+	if !strings.HasPrefix(name, "dropped-") || !strings.HasSuffix(name, ".wav") {
+		t.Errorf("file name %q, want dropped-<time>.wav", name)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples, rate, err := audio.DecodeWAV(b)
+	if err != nil {
+		t.Fatalf("DecodeWAV: %v", err)
+	}
+	if rate != vad.SampleRate || len(samples) != clip {
+		t.Fatalf("WAV %d Hz, %d samples; want %d Hz, %d", rate, len(samples), vad.SampleRate, clip)
+	}
+	for i, s := range samples {
+		if want := int16(i%vad.Window - vad.Window/2); s != want {
+			t.Fatalf("sample %d = %d, want %d", i, s, want)
+		}
+	}
+}
+
+// TestListenDumpOnlyDropped: a kept turn writes nothing even with the option.
+func TestListenDumpOnlyDropped(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dropped")
+	got, _ := listenDump("Да.", WithDumpDropped(dir))
+	if len(got) != 3 {
+		t.Fatalf("got %+v, want start,end,text", got)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("Stat(%s) = %v, want not created", dir, err)
+	}
+}
+
+// TestListenNoDumpByDefault: without the option a dropped turn writes nothing
+// (checked in an empty working directory).
+func TestListenNoDumpByDefault(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+	if got, _ := listenDump(credits + " " + credits); len(got) != 2 {
+		t.Fatalf("got %+v, want start,end", got)
+	}
+	if files, _ := os.ReadDir(wd); len(files) != 0 {
+		t.Fatalf("working dir has %v, want empty", files)
+	}
+}
+
+// TestListenDumpErrorKeepsStream: an unwritable dump dir (a regular file in
+// its place) is logged; the events of this and the next turn still arrive.
+func TestListenDumpErrorKeepsStream(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(dir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probs := append(speechThenSilence(), speechThenSilence()...)
+	src := &fakeSource{frames: len(probs), buf: make([]int16, vad.Window)}
+	rec := clipRecognizer{text: credits + " " + credits, got: make(chan int, 2)}
+	got := collectEvents(Listen(context.Background(), src, &fakeDetector{probs: probs}, rec,
+		vad.DefaultTiming(), WithMaxCharsPerSec(30), WithDumpDropped(dir)), 2*time.Second)
+
+	want := []EventKind{SpeechStart, SpeechEnd, SpeechStart, SpeechEnd}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %v", got, want)
+	}
+	for i, k := range want {
+		if got[i].Kind != k {
+			t.Errorf("event %d = %v, want %v", i, got[i].Kind, k)
+		}
+	}
+	if len(rec.got) != 2 {
+		t.Errorf("recogniser called %d times, want 2", len(rec.got))
 	}
 }
