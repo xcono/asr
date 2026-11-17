@@ -108,7 +108,10 @@ deaf in a long stream and scores loud words near zero
 on a 304 s session recording 27 of 124 loud bursts fell outside every segment,
 with the context 1. The model state is never reset; the probabilities match
 the official implementation to within 4e-6. `threshold` 0.30 was picked
-before the context was added and still needs re-checking on a live mic.
+before the context was added; with the context a live test (2026-11-18) kept
+it: quiet one-word utterances peaked at 0.90–0.99, also after 24 minutes of
+silence in one session, with no false segment in that silence. Hand claps and
+mic rustle open nothing; a cough can still open a segment.
 
 #### Replaying a session: `vadscan`
 

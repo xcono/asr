@@ -180,7 +180,14 @@ output is float32 [-1,1], not int16.
   `TestModelMatchesReference` compares a synthetic signal with probabilities
   from the official implementation (`pkg/vad/testdata`, regeneration steps on
   the test) — keep it passing; check model changes with `cmd/vadscan` on
-  session recordings.
+  session recordings. A VAD symptom that looks like sensitivity (missed soft
+  words, a threshold that has to go lower) is a reason to compare against the
+  official implementation first — the missing context hid behind a lowered
+  threshold and raised mic gain from June to November 2026.
+- **A cough still opens a segment; claps and mic rustle do not** (live test,
+  2026-11-18). The text is caught downstream (letter budget, phrase list), but
+  `IsSpeaking()` is true for that segment — whether a segment with no text
+  interrupts playback is `xcono/voices`' decision, not solved here.
 - **The timing consts are tuned for Silero v5.** A v6 model scores the same
   audio differently — switching generations means re-tuning
   `pkg/vad/consts.go`, not a drop-in swap. Read the comments there before

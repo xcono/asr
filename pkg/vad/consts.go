@@ -20,8 +20,10 @@ const (
 	// 0.30 was picked while Model fed Silero no 64-sample context (deaf in a
 	// stream, masked by state resets in pauses). With the context, offline on
 	// the session recordings 0.40 missed the same loud bursts and 0.50 missed
-	// 5 on the 304 s one, so 0.30 stays — but it needs re-checking on the live
-	// mic.
+	// 5 on the 304 s one, so 0.30 stays. Checked on the live mic on 2026-11-18:
+	// quiet one-syllable words peaked at 0.90-0.99 (7+ speech windows), also
+	// after 24 minutes of silence in one session, so there is headroom to raise
+	// it if false triggers ever matter more than soft speech.
 	Threshold  = float32(0.30)
 	Hysteresis = float32(0.15)
 
