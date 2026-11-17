@@ -14,8 +14,19 @@ const (
 // state accumulates. speechRun/silenceRun are LEAKY counters: a speech window
 // builds speechRun and bleeds one off silenceRun (and vice-versa), so a brief
 // dip between words decrements evidence by one instead of zeroing it — sustained
-// but choppy speech still crosses the onset threshold. The clamp stops stale
-// credit from a prior utterance firing the next onset instantly.
+// but choppy speech still crosses the onset threshold, and a short pause inside
+// an utterance is forgiven gradually rather than at once.
+//
+// The leak holds WITHIN a state only. A flip zeroes the counter that argues for
+// the state just left, because that evidence was gathered before the flip and
+// says nothing about how long the new state has lasted. Without the reset the
+// clamp kept it: after a long idle silenceRun sat at releaseWindow, the onset
+// bled off only onsetWindows of it, and that many silence windows topped it
+// back up — segments closed 64–128 ms after opening instead of after ReleaseMs,
+// chopping phrases into fragments. The full release applied only once speech
+// had run for a whole release window. The mirror case (speechRun surviving a
+// release and confirming the next onset early) needs a release window shorter
+// than the onset budget, so the defaults never hit it; the reset covers it too.
 type FSM struct {
 	speaking      bool
 	speechRun     int
@@ -73,9 +84,11 @@ func (f *FSM) Update(prob float32) Transition {
 	switch {
 	case !f.speaking && f.speechRun >= f.onsetWindows:
 		f.speaking = true
+		f.silenceRun = 0 // evidence from before the onset; see the FSM comment
 		return ToSpeaking
 	case f.speaking && f.silenceRun >= f.releaseWindow:
 		f.speaking = false
+		f.speechRun = 0 // evidence from before the release; see the FSM comment
 		return ToSilence
 	default:
 		return None
