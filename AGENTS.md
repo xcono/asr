@@ -19,6 +19,7 @@ orchestrator turn loop.
 make          # default goal: run cmd/vox (loads config.json from cwd)
 make build    # compile to ./bin/vox
 make test     # go test ./...
+make vadscan  # replay recordings/session-*.wav through vad.Model+FSM (WAV=<file>)
 make help     # list documented targets
 make up-whisper / down-whisper   # Whisper STT server (docker.whisper.yaml)
 ```
@@ -74,6 +75,11 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
   is wrapped in an `asr.Recorder` the same way, and its `Close` is deferred
   so the Ctrl-C path (cancel → Listen returns → `run` returns) finalises the
   WAV header.
+- `cmd/vadscan/main.go` — offline replay of a 16 kHz mono WAV (a session
+  recording) through `vad.Model` + `vad.FSM` with `-config` timings: summary,
+  segments (`at=`/`end=` aligned with `vox`'s lines, clip stats as in
+  `VADStats`) and loud bursts (`-loud` dBFS, `-min-ms`) outside every clip.
+  The tool for VAD tuning on real sessions; no network.
 - `pkg/asr` — `Listen` (`listen.go`) is the pipeline controller: it owns the
   FSM, preroll ring and utterance buffer, and transcribes in a goroutine so a
   slow recogniser never stalls capture. The channel closes when the source
@@ -148,6 +154,14 @@ output is float32 [-1,1], not int16.
 
 - **`Model.Infer` is stateful** (Silero's recurrent state). One `Model` per
   stream; it is not safe for concurrent use.
+- **`Model` resets its own state in pauses.** After `ResetAfterSilenceMs`
+  (500 ms) of windows below `Threshold − Hysteresis` it calls `govad.Reset`
+  and re-reads the quiet window (warm-up). Without it Silero v5 goes deaf in a
+  long stream (loud words at 0.01–0.2). It keys on probability only, so it
+  also fires in an open segment's release tail — measured harmless. The gate
+  uses the package consts, not a configured `Timing`. Numbers and rejected
+  variants are on the const and the `Model` comment; check a change with
+  `cmd/vadscan` on session recordings.
 - **The timing consts are tuned for Silero v5.** A v6 model scores the same
   audio differently — switching generations means re-tuning
   `pkg/vad/consts.go`, not a drop-in swap. Read the comments there before

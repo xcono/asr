@@ -45,6 +45,7 @@ Audio format is fixed: **16 kHz / 16-bit / little-endian / mono**, in
 make          # run cmd/vox (loads config.json from the working directory)
 make build    # compile to ./bin/vox
 make test     # go test ./...
+make vadscan  # replay recordings/session-*.wav through the VAD (WAV=<file> for one)
 make help     # list all targets
 ```
 
@@ -98,6 +99,40 @@ has a default, so `{}` is a valid config.
 
 The defaults are tuned for Silero **v5** probabilities; a different model
 generation needs re-tuning.
+
+Silero's recurrent state is reset after 500 ms of windows below the release
+gate (`vad.ResetAfterSilenceMs`; not a config field). In a long stream the
+model otherwise goes deaf and scores loud words near zero, losing several
+words in a row; on two session recordings the reset cut the loud bursts left
+outside every segment from 27 of 124 to 1 and from 12 of 40 to 0.
+
+#### Replaying a session: `vadscan`
+
+`cmd/vadscan` runs a recorded WAV (16 kHz mono, e.g. a `record_dir` session
+file) through the same `vad.Model` + `vad.FSM`, with the `vad` section of
+`-config` (default `config.json`), and prints a summary, every segment and
+every loud burst that no segment covers. No network, no recogniser.
+
+```bash
+go run ./cmd/vadscan [-config config.json] [-loud -35] [-min-ms 96] file.wav ...
+```
+
+```
+recordings/session-….wav: 303.6s, 88 segments, mean_peak=0.94, resets=439, loud bursts 124, outside segments 1 (loud >= -35 dBFS, >= 96 ms)
+segments:
+  at=4.32s end=5.25s clip=1.22s vad_peak=0.91 speech_win=9/38
+loud bursts outside segments:
+  at=279.10s 0.13s peak=-16.5dBFS max_prob=0.19
+```
+
+`at=`/`end=` match `vox`'s `speaking started/stopped at=`; `clip` is what
+would reach the recogniser (preroll included), and `vad_peak`/`speech_win`
+are computed over it as in the live log. A loud burst is a run of windows at
+or above `-loud` dBFS that may contain up to 96 ms of quieter windows and
+lasts at least `-min-ms`; it counts as covered when it overlaps a clip.
+`max_prob` is Silero's best probability inside a missed burst — near zero is
+a deaf model or non-speech, just under `threshold` is a tuning question.
+`resets` counts the state resets above.
 
 ### STT providers
 

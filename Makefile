@@ -18,6 +18,11 @@ run:
 build:
 	go build -o bin/vox ./cmd/vox
 
+## vadscan: replay recordings through the VAD (WAV=recordings/session-*.wav)
+.PHONY: vadscan
+vadscan:
+	go run ./cmd/vadscan $(or $(WAV),$(wildcard recordings/session-*.wav))
+
 ## test: run the Go test suite
 .PHONY: test
 test:

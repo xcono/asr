@@ -40,4 +40,21 @@ const (
 	// ring from BargeInMs alone clips that lead-in (soft consonants, short leading
 	// words); PrerollMs adds margin to recover it.
 	PrerollMs = 300
+
+	// ResetAfterSilenceMs of consecutive windows below the silence gate
+	// (Threshold - Hysteresis) makes Model reset Silero's recurrent state. In a
+	// continuous stream Silero v5 goes deaf: loud words (windows up to
+	// -14 dBFS) scored 0.01-0.2 and never opened a segment, while the same
+	// samples from a clean state scored 0.8-0.99 — the owner heard it as 3-4
+	// words in a row lost. It is the model, not govad (govad matched ONNX
+	// Runtime to 4e-6 on the same 304 s recording); why the state degrades is
+	// not known. Measured on two session recordings (304 s / 79 s; a loud
+	// burst = windows >= -35 dBFS, gaps <= 3 windows, >= 3 windows long):
+	// without the reset 27 of 124 and 12 of 40 bursts fell outside every
+	// segment, with it 1 and 0; no segment without loud sound was added, the
+	// mean segment peak rose from 0.68 to 0.94, and no phrase longer than 2 s
+	// was split. 250 ms scored the same at twice the resets; 1 s missed 5 and
+	// 3 s missed 13 on the long recording (measured before the warm-up in
+	// Model). Rounded down to whole windows: 15 windows = 480 ms.
+	ResetAfterSilenceMs = 500
 )
