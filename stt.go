@@ -68,7 +68,7 @@ type Service struct {
 // which are process-global. Run at most one New-built Service per process. A
 // consumer that already owns the audio device should use NewWith instead.
 func New(cfg *config.Config) (*Service, error) {
-	rec, err := recognizer(cfg.STT)
+	rec, err := NewRecognizer(cfg.ASR)
 	if err != nil {
 		return nil, err
 	}
@@ -188,16 +188,26 @@ func (s *Service) Close() error {
 	return err
 }
 
-// recognizer builds the STT provider from config. Mirrors cmd/vox: "gigaam"
-// and "whisper" are wired; "elevenlabs" is config-only until a Recognizer
-// implementation exists.
-func recognizer(c config.STTConfig) (asr.Recognizer, error) {
+// NewRecognizer builds the STT provider from config: local GigaAM ("gigaam"),
+// local whisper.cpp ("whisper" — the same batch client plus language/prompt)
+// or cloud ElevenLabs Scribe ("elevenlabs"). It is the only provider switch:
+// cmd/vox and the facade both call it. Exported so consumers that inject
+// components via NewWith (e.g. ../voices WAV replay) build the same provider
+// the live pipeline uses.
+func NewRecognizer(c config.ASRConfig) (asr.Recognizer, error) {
 	switch c.Provider {
 	case "gigaam":
 		return &asr.Transcriber{BaseURL: c.GigaAM.BaseURL, Model: c.GigaAM.Model}, nil
 	case "whisper":
 		w := c.Whisper
 		return &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt}, nil
+	case "elevenlabs":
+		return &asr.ElevenLabs{
+			APIKey:       c.ElevenLabs.APIKey,
+			Model:        c.ElevenLabs.Model,
+			LanguageCode: c.ElevenLabs.LanguageCode,
+			BaseURL:      c.ElevenLabs.BaseURL,
+		}, nil
 	default:
 		return nil, fmt.Errorf("stt: unknown provider %q", c.Provider)
 	}

@@ -33,15 +33,15 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 300, cfg.VAD.PrerollMs)
 
 	// STT defaults
-	assert.Equal(t, "gigaam", cfg.STT.Provider)
-	assert.Equal(t, "http://localhost:8008/v1", cfg.STT.GigaAM.BaseURL)
-	assert.Empty(t, cfg.STT.GigaAM.Model)
-	assert.Equal(t, "http://localhost:8008/v1", cfg.STT.Whisper.BaseURL)
-	assert.Equal(t, "ru", cfg.STT.Whisper.Language)
-	assert.Empty(t, cfg.STT.Whisper.Model)
-	assert.Empty(t, cfg.STT.Whisper.Prompt)
-	assert.Empty(t, cfg.STT.ElevenLabs.APIKey)
-	assert.Empty(t, cfg.STT.ElevenLabs.Model)
+	assert.Equal(t, "gigaam", cfg.ASR.Provider)
+	assert.Equal(t, "http://localhost:8008/v1", cfg.ASR.GigaAM.BaseURL)
+	assert.Empty(t, cfg.ASR.GigaAM.Model)
+	assert.Equal(t, "http://localhost:8008/v1", cfg.ASR.Whisper.BaseURL)
+	assert.Equal(t, "ru", cfg.ASR.Whisper.Language)
+	assert.Empty(t, cfg.ASR.Whisper.Model)
+	assert.Empty(t, cfg.ASR.Whisper.Prompt)
+	assert.Empty(t, cfg.ASR.ElevenLabs.APIKey)
+	assert.Empty(t, cfg.ASR.ElevenLabs.Model)
 }
 
 func TestLoad_FullConfig(t *testing.T) {
@@ -58,7 +58,7 @@ func TestLoad_FullConfig(t *testing.T) {
 			EndOfTurnMs: 1000,
 			PrerollMs:   200,
 		},
-		STT: STTConfig{
+		ASR: ASRConfig{
 			Provider: "elevenlabs",
 			GigaAM: GigaAMConfig{
 				BaseURL: "http://custom:8008/v1",
@@ -87,30 +87,30 @@ func TestLoad_FullConfig(t *testing.T) {
 	assert.Equal(t, 200, cfg.VAD.PrerollMs)
 
 	// STT
-	assert.Equal(t, "elevenlabs", cfg.STT.Provider)
-	assert.Equal(t, "http://custom:8008/v1", cfg.STT.GigaAM.BaseURL)
-	assert.Equal(t, "custom-model", cfg.STT.GigaAM.Model)
-	assert.Equal(t, "sk-abc123", cfg.STT.ElevenLabs.APIKey)
-	assert.Equal(t, "eleven_multilingual_v2", cfg.STT.ElevenLabs.Model)
+	assert.Equal(t, "elevenlabs", cfg.ASR.Provider)
+	assert.Equal(t, "http://custom:8008/v1", cfg.ASR.GigaAM.BaseURL)
+	assert.Equal(t, "custom-model", cfg.ASR.GigaAM.Model)
+	assert.Equal(t, "sk-abc123", cfg.ASR.ElevenLabs.APIKey)
+	assert.Equal(t, "eleven_multilingual_v2", cfg.ASR.ElevenLabs.Model)
 }
 
 func TestLoad_WhisperSection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	requireWriteString(t, path, `{"stt": {"provider": "whisper", "whisper": {
+	requireWriteString(t, path, `{"asr": {"provider": "whisper", "whisper": {
 		"base_url": "http://gpu:9000/v1", "model": "large-v3-turbo",
 		"language": "auto", "prompt": "Kibana, хотфикс"}}}`)
 
 	cfg, err := Load(path)
 	assert.NoError(t, err)
-	assert.Equal(t, "whisper", cfg.STT.Provider)
+	assert.Equal(t, "whisper", cfg.ASR.Provider)
 	assert.Equal(t, WhisperConfig{
 		BaseURL:  "http://gpu:9000/v1",
 		Model:    "large-v3-turbo",
 		Language: "auto",
 		Prompt:   "Kibana, хотфикс",
-	}, cfg.STT.Whisper)
+	}, cfg.ASR.Whisper)
 }
 
 func TestLoad_MissingFile(t *testing.T) {
@@ -147,7 +147,7 @@ func TestLoad_EmptyPathDefaults(t *testing.T) {
 	assert.NoError(t, err)
 
 	requireWriteJSON(t, "config.json", map[string]any{
-		"stt": map[string]any{
+		"asr": map[string]any{
 			"provider": "elevenlabs",
 		},
 	})
@@ -155,7 +155,7 @@ func TestLoad_EmptyPathDefaults(t *testing.T) {
 	cfg, err := Load("")
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
-	assert.Equal(t, "elevenlabs", cfg.STT.Provider)
+	assert.Equal(t, "elevenlabs", cfg.ASR.Provider)
 }
 
 func TestToTiming(t *testing.T) {

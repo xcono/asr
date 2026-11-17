@@ -149,12 +149,12 @@ func TestServiceCloseIsIdempotent(t *testing.T) {
 // TestRecognizerWhisper checks the facade maps the whisper config section onto
 // the batch client, including the whisper.cpp-only fields.
 func TestRecognizerWhisper(t *testing.T) {
-	rec, err := recognizer(config.STTConfig{
+	rec, err := NewRecognizer(config.ASRConfig{
 		Provider: "whisper",
 		Whisper:  config.WhisperConfig{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p"},
 	})
 	if err != nil {
-		t.Fatalf("recognizer: %v", err)
+		t.Fatalf("NewRecognizer: %v", err)
 	}
 	tr, ok := rec.(*asr.Transcriber)
 	if !ok {
@@ -166,10 +166,30 @@ func TestRecognizerWhisper(t *testing.T) {
 	}
 }
 
+// TestRecognizerElevenLabs checks the elevenlabs section reaches the Scribe
+// client; the two providers must not shadow each other in the one switch.
+func TestRecognizerElevenLabs(t *testing.T) {
+	rec, err := NewRecognizer(config.ASRConfig{
+		Provider:   "elevenlabs",
+		ElevenLabs: config.ElevenLabsConfig{APIKey: "k", Model: "m", LanguageCode: "ru", BaseURL: "http://e"},
+	})
+	if err != nil {
+		t.Fatalf("NewRecognizer: %v", err)
+	}
+	el, ok := rec.(*asr.ElevenLabs)
+	if !ok {
+		t.Fatalf("recognizer type = %T, want *asr.ElevenLabs", rec)
+	}
+	want := asr.ElevenLabs{APIKey: "k", Model: "m", LanguageCode: "ru", BaseURL: "http://e"}
+	if *el != want {
+		t.Fatalf("elevenlabs = %+v, want %+v", *el, want)
+	}
+}
+
 // TestRecognizerUnknownProvider keeps a typo in config a hard error rather than
 // a silently missing transcriber.
 func TestRecognizerUnknownProvider(t *testing.T) {
-	if _, err := recognizer(config.STTConfig{Provider: "nope"}); err == nil {
+	if _, err := NewRecognizer(config.ASRConfig{Provider: "nope"}); err == nil {
 		t.Fatal("expected an error for an unknown provider, got nil")
 	}
 }

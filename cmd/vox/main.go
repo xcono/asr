@@ -18,6 +18,7 @@ import (
 
 	"github.com/gordonklaus/portaudio"
 
+	stt "github.com/xcono/asr"
 	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/audio"
 	"github.com/xcono/asr/pkg/config"
@@ -74,16 +75,18 @@ func run(cfg *config.Config) error {
 		restore()
 	}
 
-	// --- STT recognizer ---
-	var rec *asr.Transcriber
-	switch cfg.STT.Provider {
-	case "gigaam":
-		rec = &asr.Transcriber{BaseURL: cfg.STT.GigaAM.BaseURL, Model: cfg.STT.GigaAM.Model}
-	case "whisper":
-		w := cfg.STT.Whisper
-		rec = &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt}
-	default:
-		return fmt.Errorf("unknown stt provider: %s", cfg.STT.Provider)
+	// --- ASR recognizer ---
+	rec, err := stt.NewRecognizer(cfg.ASR)
+	if err != nil {
+		return err
+	}
+
+	// asr.Listen takes the Detector interface; under "vad.debug" wrap the model to
+	// tee each window's Silero probability to stderr (diagnoses missed onsets). The
+	// meter draws its gate ticks from timing, so they track the configured thresholds.
+	var det asr.Detector = model
+	if cfg.VAD.Debug {
+		det = debugDetector{inner: model, w: os.Stderr, timing: timing}
 	}
 
 	// --- Pipeline ---
@@ -99,9 +102,9 @@ func run(cfg *config.Config) error {
 	}()
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
-	fmt.Printf("STT: %s (%s)\n", cfg.STT.Provider, rec.BaseURL)
+	fmt.Printf("ASR: %s%s\n", cfg.ASR.Provider, endpoint(rec))
 
-	events := asr.Listen(ctx, mic, model, rec, timing)
+	events := asr.Listen(ctx, mic, det, rec, timing)
 	for ev := range events {
 		switch ev.Kind {
 		case asr.SpeechStart:
@@ -119,4 +122,21 @@ func run(cfg *config.Config) error {
 		log.Printf("note: tolerated %d mic input overflow(s)", n)
 	}
 	return nil
+}
+
+// endpoint names the server a recognizer talks to, for the startup line. It reads
+// the built recognizer rather than a config section so the line cannot name one
+// provider's URL while another is selected (it used to print GigaAM's always).
+func endpoint(rec asr.Recognizer) string {
+	switch r := rec.(type) {
+	case *asr.Transcriber:
+		return " (" + r.BaseURL + ")"
+	case *asr.ElevenLabs:
+		if r.BaseURL != "" {
+			return " (" + r.BaseURL + ")"
+		}
+		return " (api.elevenlabs.io)"
+	default:
+		return ""
+	}
 }

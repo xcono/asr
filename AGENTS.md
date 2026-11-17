@@ -37,9 +37,12 @@ its `testfiles/`), falling back to a `wget` from `snakers4/silero-vad`
 `SILERO_VERSION` (default `v5.1.2`). Override `ORT_VERSION`, `SILERO_VERSION`,
 `ORT`, `MODEL_PATH` on the make command line to retarget.
 
-The binary takes one flag: `-config <path>` (default `config.json`). Config is
-read from the working directory by default — run from the repo root so
-`pkg/vad/silero_vad.onnx` (the default `model_path`) resolves.
+The binary takes one flag: `-config <path>` (default `config.json`). VAD
+diagnostics are a config field, not a flag: `"vad": {"debug": true}` tees each
+window's Silero speech probability to stderr as a meter, to diagnose missed
+onsets; its gate ticks track the configured VAD timing. Config is read from the working directory by default —
+run from the repo root so `pkg/vad/silero_vad.onnx` (the default `model_path`)
+resolves.
 
 ### ONNX Runtime (required to build/run)
 
@@ -76,12 +79,17 @@ modcache — the fork's `testfiles/silero_vad.onnx` — or downloads from
 
 `config.json` (or the path passed via `-config`). Schema lives in
 `pkg/config/config.go`; `Load` calls `setDefaults`, so every zero value has a
-sensible fallback and a minimal `{}` file still runs. Provider is `"gigaam"` by
-default in code; the checked-in `config.json` selects `"whisper"` (section
-`stt.whisper`: `base_url` default `http://localhost:8008/v1`, `model` (ignored by
-whisper.cpp), `language` default `ru`, `prompt` default empty). Both providers
-use the same `asr.Transcriber`; `language`/`prompt` are sent only when non-empty.
-`"elevenlabs"` is parsed but **not wired in code** (config placeholder only). See `README.md` for the full table of VAD parameters and their meaning.
+sensible fallback and a minimal `{}` file still runs. The two sections are
+`vad` and `asr` (the speech-to-text section was `stt` before the rename — a
+file still using `"stt"` is silently ignored and falls back to defaults).
+Provider is `"gigaam"` by default in code; the checked-in `config.json` selects
+`"whisper"` (section `asr.whisper`: `base_url` default
+`http://localhost:8008/v1`, `model` (ignored by whisper.cpp), `language` default
+`ru`, `prompt` default empty). `gigaam` and `whisper` use the same
+`asr.Transcriber`; `language`/`prompt` are sent only when non-empty.
+`"elevenlabs"` is the cloud Scribe provider (`pkg/asr/elevenlabs.go`). All three
+are built by `stt.NewRecognizer`. See `README.md` for the full table of VAD
+parameters and their meaning.
 
 ## Architecture / data flow
 
@@ -92,9 +100,12 @@ Mic → audio.Capture → asr.Listen ┬─ SpeechStart → log / channel
 ```
 
 - `cmd/vox/main.go` is the only entry point: load config → load Silero → init
-  PortAudio → build an `asr.Recognizer` (`gigaam` or `whisper`; the same switch
-  is duplicated in `stt.go`'s `recognizer` — keep both in step) →
+  PortAudio → build an `asr.Recognizer` via `stt.NewRecognizer` (the one
+  provider switch, shared with the facade and with `xcono/voices`) →
   range over `asr.Listen`'s event channel → log each event. No transport.
+  `cmd/vox/vaddebug.go` is a helper in the same package: under `vad.debug` it
+  wraps the `Detector` to tee per-window speech probabilities as a meter
+  (behaviour-neutral — it returns the inner result unchanged).
 - `asr.Listen` (`pkg/asr/listen.go`) is the pipeline controller and the place
   the four domains meet. It owns the FSM, preroll ring, and utterance buffer,
   and dispatches transcription to a goroutine so a slow recogniser never
@@ -180,10 +191,11 @@ VAD-style consumers), not int16.
 - **`silero-vad-go` is a fork via `go.mod replace`.** The import path is
   `github.com/streamer45/silero-vad-go`, but `replace` redirects it to
   `github.com/hylarucoder/silero-vad-onnx-go`. Don't "tidy" the replace away.
-- **ElevenLabs STT is config-only.** `STTConfig.ElevenLabs` parses, but
-  `main.go`'s provider switch has no `"elevenlabs"` case — it will fail with
-  `unknown stt provider`. Add the case + a `Recognizer` implementation before
-  relying on it.
+- **ElevenLabs STT is batch-only, like GigaAM and Whisper.** `asr.ElevenLabs`
+  (`pkg/asr/elevenlabs.go`) posts each VAD-segmented clip to the cloud Scribe
+  API (`/v1/speech-to-text`, `scribe_v2`, `xi-api-key` header). It needs
+  `elevenlabs.api_key` in config — `stt.NewRecognizer` does not validate it, so
+  a missing key fails at request time (401), not startup.
 - **Streaming STT is unused.** `asr.StreamSession` / `DialStream` /
   `WSURLFromHTTP` are implemented and tested but not called by the pipeline.
   `vad.EndOfTurn` (the streaming turn-end signal) is also unused outside its
@@ -198,9 +210,9 @@ VAD-style consumers), not int16.
 Goal is to avoid Python in the codebase. GigaAM currently requires an external
 Python server exposing an OpenAI-compatible `/v1/audio/transcriptions`
 endpoint — that process is an external dependency, not embedded Go code, and is
-pointed at via `stt.gigaam.base_url`. Whisper runs in a locally built whisper.cpp
+pointed at via `asr.gigaam.base_url`. Whisper runs in a locally built whisper.cpp
 (C++) image (`llm/whisper/Dockerfile`, compiled for sm_120 — the upstream image
-has no RTX 50xx code), same endpoint, via `stt.whisper.base_url`; its measured
+has no RTX 50xx code), same endpoint, via `asr.whisper.base_url`; its measured
 HTTP contract is in `llm/whisper/README.md`. If a Go-native ASR alternative becomes
 viable, replace the `Transcriber`.
 

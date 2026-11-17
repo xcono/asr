@@ -45,13 +45,14 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
     "barge_in_ms": 64,
     "release_ms": 700,
     "end_of_turn_ms": 800,
-    "preroll_ms": 300
+    "preroll_ms": 300,
+    "debug": false
   },
-  "stt": {
+  "asr": {
     "provider": "whisper",
     "gigaam": { "base_url": "http://localhost:8008/v1", "model": "" },
     "whisper": { "base_url": "http://localhost:8008/v1", "model": "", "language": "ru", "prompt": "" },
-    "elevenlabs": { "api_key": "", "model": "" }
+    "elevenlabs": { "api_key": "", "model": "", "language_code": "", "base_url": "" }
   }
 }
 ```
@@ -71,7 +72,7 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
 
 - **gigaam** — local batch STT via an OpenAI-compatible HTTP API (`/v1/audio/transcriptions`). Requires a separate Python server running at `base_url`.
 - **whisper** — the same batch client against the whisper.cpp server (`docker.whisper.yaml`). Extra fields `language` (default `ru`; `auto` to detect — with a fixed language whisper.cpp translates other languages instead of transcribing them) and `prompt` (default empty; decoder context that steers spelling of terms). Both are sent only when non-empty. Multi-segment replies are flattened to one line.
-- **elevenlabs** — remote STT (not yet wired in code, config placeholder only).
+- **elevenlabs** — cloud batch STT via the ElevenLabs Scribe API (`/v1/speech-to-text`, default model `scribe_v2`). Requires `api_key`; `language_code` (e.g. `"ru"`) is an optional hint, empty means server-side auto-detect.
 
 `provider` defaults to `gigaam` in code; the checked-in `config.json` selects `whisper`.
 
@@ -155,7 +156,7 @@ make deps-portaudio      # or:  apt install portaudio19-dev
 
 The STT model runs as a separate server exposing an OpenAI-compatible
 `/v1/audio/transcriptions` endpoint on `:8008` — an external process, not embedded Go
-code. Point `stt.<provider>.base_url` in config at it. Three **interchangeable** backends ship
+code. Point `asr.<provider>.base_url` in config at it. Three **interchangeable** backends ship
 here as standalone compose files (each a complete `stt:8008` stack on the `voices` network;
 GigaAM and Qwen reuse the external `llms_hf-cache` volume, Whisper downloads its ggml file into
 its own `whisper-models` volume) — pick exactly one:
