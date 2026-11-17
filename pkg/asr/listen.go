@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/xcono/asr/pkg/audio"
@@ -68,19 +70,30 @@ func (k EventKind) String() string {
 // created, and VoiceFileID associates the transcription with an audio
 // recording file (if any).
 //
-// Audio, CharsPerSec and Segments are diagnostics for SpeechText, kept so a
-// log can show why a turn passed the rate filter; consumers may ignore them.
-// VAD is set on SpeechEnd and SpeechText alike, so a turn whose transcription
-// is empty, failed or dropped still shows what the VAD saw.
+// Offset places the event in the audio rather than on the clock: the samples
+// Listen has read from its Source up to and including the window that
+// confirmed the event, as a duration at vad.SampleRate. SpeechText repeats
+// the Offset of its SpeechEnd (the clip's end). Counting samples, not wall
+// time, keeps it exact against a Recorder wrapping the same Source — its WAV
+// has the same time base — however late the event is consumed.
+//
+// Audio, CharsPerSec, Letters, Budget and Segments are diagnostics for
+// SpeechText, kept so a log can show why a turn passed the hallucination
+// filter; consumers may ignore them. VAD is set on SpeechEnd and SpeechText
+// alike, so a turn whose transcription is empty, failed or dropped still
+// shows what the VAD saw.
 type Event struct {
 	Kind        EventKind
 	Text        string
 	Timestamp   time.Time
 	VoiceFileID string
-	Err         error // populated for SpeechError
+	Err         error         // populated for SpeechError
+	Offset      time.Duration // position in the Source stream (see above)
 
 	Audio       time.Duration // length of the clip sent to the recogniser (preroll included)
 	CharsPerSec float64       // runes of the trimmed Text per second of Audio
+	Letters     int           // letters and digits in Text, what the budget counts
+	Budget      float64       // letters allowed for Audio; +Inf when the filter is off
 	Segments    []Segment     // recogniser scores; nil unless it implements ScoredRecognizer
 	VAD         VADStats      // Silero over the clip's windows; zero on SpeechStart/SpeechError
 }
@@ -124,20 +137,49 @@ type ListenOption func(*listenOptions)
 
 type listenOptions struct {
 	maxCharsPerSec float64
+	charsSlack     float64
 	dumpDir        string
 }
 
-// WithMaxCharsPerSec drops a transcription whose text rate — runes of the
-// trimmed text per second of submitted audio — exceeds limit; 0 (or less)
-// disables the check. It exists because Whisper, given a short unclear sound,
-// hallucinates subtitle credits from its training data ("Редактор субтитров
-// А.Семкин Корректор А.Егорова": 47 runes from 0.77 s of speech, ~44/s over
-// the clip with preroll), while real speech runs at 15–18/s and a lone
-// "Да." at 4–9/s. A count of speech windows was rejected as the gate: it
-// cannot tell such a burst from a genuine "Да". The dropped turn is logged,
-// never emitted, so its SpeechEnd is the last event of that turn.
+// DefaultCharsSlack is the letters a clip may carry beyond its rate budget
+// when WithCharsSlack is not given: a short real answer ("Я не знаю.", 7
+// letters in a 1.15 s clip) fits in it whole, the shortest observed
+// hallucination ("Продолжение следует", 18 letters in 1.06 s) does not.
+const DefaultCharsSlack = 12
+
+// WithMaxCharsPerSec turns on the hallucination filter: a transcription is
+// dropped when its letters and digits exceed the budget
+//
+//	slack + limit × max(0, clip − (PrerollMs + ReleaseMs))
+//
+// with slack from WithCharsSlack (DefaultCharsSlack when absent) and the
+// pause from the Timing Listen runs with. limit <= 0 disables the filter.
+//
+// Whisper, given a short unclear sound, hallucinates subtitle credits and
+// sign-offs from its training data ("Редактор субтитров А.Семкин Корректор
+// А.Егорова", "Продолжение следует"). A plain rate cap over the whole clip
+// missed them: every clip carries ~1 s that is not speech — the preroll
+// before the onset and the release tail of silence — so a short clip's rate
+// is diluted. "Продолжение следует" in a 1.06 s clip is 20.8 runes/s, below
+// any cap that fast connected speech (15–18/s) clears. The budget subtracts
+// that pause and charges the rate only for the rest, so the 0.06 s of
+// actual speech buys 1.5 letters on top of the slack: 18 > 13.5, dropped,
+// while a long sentence still gets 25 letters for every second of it.
+// Counting letters and digits, not runes, keeps punctuation and spaces —
+// which Whisper adds freely ("Не знаю...") — out of the sum.
+//
+// A count of speech windows was rejected as the gate: it cannot tell such a
+// burst from a genuine "Да". The dropped turn is logged, never emitted, so
+// its SpeechEnd is the last event of that turn.
 func WithMaxCharsPerSec(limit float64) ListenOption {
 	return func(o *listenOptions) { o.maxCharsPerSec = limit }
+}
+
+// WithCharsSlack sets the letters allowed regardless of clip length in the
+// WithMaxCharsPerSec budget (DefaultCharsSlack when absent). It has no effect
+// while the filter is off.
+func WithCharsSlack(n float64) ListenOption {
+	return func(o *listenOptions) { o.charsSlack = n }
 }
 
 // WithDumpDropped writes the clip of every transcription WithMaxCharsPerSec
@@ -159,7 +201,7 @@ func WithDumpDropped(dir string) ListenOption {
 // Read errors) or ctx is cancelled. This is the ASR domain's "controller": act
 // consumes it; it knows nothing about act.
 func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad.Timing, opts ...ListenOption) <-chan Event {
-	var o listenOptions
+	o := listenOptions{charsSlack: DefaultCharsSlack}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -178,6 +220,7 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 		preProbs := make([]float32, 0, t.PrerollSamples()/vad.Window+1)
 		var utter []int16
 		var stats VADStats
+		var read int64 // samples read from src: Event.Offset's clock
 		capturing := false
 
 		for {
@@ -194,6 +237,8 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 				}
 				return // EOF (clean) or transport error ends listening
 			}
+			read += int64(len(frame))
+			at := time.Duration(read) * time.Second / vad.SampleRate
 			pre.Push(frame)
 
 			prob, err := det.Infer(frame)
@@ -214,7 +259,7 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 
 			switch fsm.Update(prob) {
 			case vad.ToSpeaking:
-				emit(ctx, out, Event{Kind: SpeechStart, Timestamp: time.Now()})
+				emit(ctx, out, Event{Kind: SpeechStart, Timestamp: time.Now(), Offset: at})
 				utter = pre.Snapshot() // seed with the pre-onset lead-in
 				stats = VADStats{}
 				for _, p := range preProbs {
@@ -227,7 +272,7 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 				}
 				capturing = false
 				vs := stats
-				emit(ctx, out, Event{Kind: SpeechEnd, Timestamp: time.Now(), VAD: vs})
+				emit(ctx, out, Event{Kind: SpeechEnd, Timestamp: time.Now(), Offset: at, VAD: vs})
 				clip := utter
 				utter = nil
 				wg.Go(func() {
@@ -238,12 +283,18 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 					ev := Event{
 						Kind:     SpeechText,
 						Text:     tr.Text,
+						Offset:   at,
 						Audio:    time.Duration(len(clip)) * time.Second / vad.SampleRate,
+						Letters:  countLetters(tr.Text),
+						Budget:   math.Inf(1),
 						Segments: tr.Segments,
 						VAD:      vs,
 					}
 					ev.CharsPerSec = charsPerSec(ev.Text, ev.Audio)
-					if o.maxCharsPerSec > 0 && ev.CharsPerSec > o.maxCharsPerSec {
+					if o.maxCharsPerSec > 0 {
+						ev.Budget = letterBudget(ev.Audio, t, o.charsSlack, o.maxCharsPerSec)
+					}
+					if float64(ev.Letters) > ev.Budget {
 						wav := ""
 						if o.dumpDir != "" {
 							if path, err := dumpClip(o.dumpDir, clip, time.Now()); err != nil {
@@ -252,8 +303,8 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 								wav = " wav=" + path
 							}
 						}
-						log.Printf("asr: dropped %q: %.2fs, %.1f chars/s > %g%s%s%s",
-							ev.Text, ev.Audio.Seconds(), ev.CharsPerSec, o.maxCharsPerSec,
+						log.Printf("asr: dropped %q: at=%.2fs %.2fs, %d letters > budget %.1f, %.1f chars/s%s%s%s",
+							ev.Text, ev.Offset.Seconds(), ev.Audio.Seconds(), ev.Letters, ev.Budget, ev.CharsPerSec,
 							ev.VAD, FormatSegments(ev.Segments), wav)
 						return
 					}
@@ -298,7 +349,30 @@ func transcribe(ctx context.Context, rec Recognizer, clip []int16) (Transcript, 
 	return Transcript{Text: text}, err
 }
 
-// charsPerSec is the text rate the hallucination filter compares: runes, not
+// letterBudget is the letters WithMaxCharsPerSec allows in a clip of length d:
+// slack plus rate for every second beyond the pause the clip always carries —
+// the preroll lead-in and the release tail (1.0 s at the defaults). The pause
+// is taken from the configured milliseconds, not rounded to windows, so the
+// budget reads off the config directly.
+func letterBudget(d time.Duration, t vad.Timing, slack, rate float64) float64 {
+	pause := time.Duration(t.PrerollMs+t.ReleaseMs) * time.Millisecond
+	return slack + rate*max(0, (d-pause).Seconds())
+}
+
+// countLetters counts the letters and digits of text — what a speaker
+// actually says; punctuation and spaces are the recogniser's formatting.
+func countLetters(text string) int {
+	n := 0
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			n++
+		}
+	}
+	return n
+}
+
+// charsPerSec is the plain text rate, runes per second of the whole clip,
+// kept for the log alongside the letter budget that now decides: runes, not
 // bytes, so Cyrillic counts the same as Latin.
 func charsPerSec(text string, d time.Duration) float64 {
 	if d <= 0 {

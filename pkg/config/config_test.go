@@ -42,6 +42,16 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.ASR.ElevenLabs.APIKey)
 	assert.Empty(t, cfg.ASR.ElevenLabs.Model)
 	assert.Empty(t, cfg.ASR.DumpDroppedDir, "dumping dropped clips is off by default")
+	assert.Empty(t, cfg.ASR.RecordDir, "session recording is off by default")
+}
+
+// TestLoad_RecordDir: the field is read as given.
+func TestLoad_RecordDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	requireWriteJSON(t, path, map[string]any{"asr": map[string]any{"record_dir": "recordings"}})
+	cfg, err := Load(path)
+	assert.NoError(t, err)
+	assert.Equal(t, "recordings", cfg.ASR.RecordDir)
 }
 
 // TestLoad_DumpDroppedDir: the field is read as given, independent of vad.debug.
@@ -230,4 +240,28 @@ func TestCharsPerSecLimit(t *testing.T) {
 	}
 	var lit ASRConfig
 	assert.Equal(t, float64(DefaultMaxCharsPerSec), lit.CharsPerSecLimit())
+}
+
+// TestCharsSlackOrDefault: absent means asr.DefaultCharsSlack (also for a
+// literal ASRConfig), an explicit value — 0 included — is taken as is.
+func TestCharsSlackOrDefault(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name string
+		asr  map[string]any
+		want float64
+	}{
+		{"absent", map[string]any{}, 12},
+		{"zero", map[string]any{"chars_slack": 0}, 0},
+		{"explicit", map[string]any{"chars_slack": 8.5}, 8.5},
+	} {
+		path := filepath.Join(dir, "config.json")
+		requireWriteJSON(t, path, map[string]any{"asr": c.asr})
+		cfg, err := Load(path)
+		assert.NoError(t, err, c.name)
+		assert.Equal(t, c.want, cfg.ASR.CharsSlackOrDefault(), c.name)
+	}
+	var lit ASRConfig
+	assert.Equal(t, float64(12), lit.CharsSlackOrDefault())
+	assert.Equal(t, float64(25), lit.CharsPerSecLimit())
 }

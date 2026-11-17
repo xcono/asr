@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/vad"
 )
 
@@ -31,26 +32,38 @@ type VADConfig struct {
 // ASRConfig holds the speech-to-text provider configuration.
 type ASRConfig struct {
 	Provider string `json:"provider"` // "gigaam", "whisper" or "elevenlabs"
-	// MaxCharsPerSec drops a live transcription whose text rate (runes per
-	// second of submitted audio) exceeds it — Whisper's subtitle-credit
-	// hallucinations on short unclear sounds (see asr.WithMaxCharsPerSec).
-	// A pointer so an explicit 0 (filter off) differs from "absent"; read it
-	// through CharsPerSecLimit, which also covers configs built without Load.
+	// MaxCharsPerSec is the rate of the letter budget that drops Whisper's
+	// subtitle-credit hallucinations on short unclear sounds: a live
+	// transcription may carry CharsSlack letters plus this many per second
+	// of clip beyond the preroll + release pause (see asr.WithMaxCharsPerSec
+	// for why a budget and not a plain rate). 0 turns the filter off.
+	// A pointer so an explicit 0 differs from "absent"; read it through
+	// CharsPerSecLimit, which also covers configs built without Load.
 	MaxCharsPerSec *float64 `json:"max_chars_per_sec"`
-	// DumpDroppedDir, when set, saves the clip of each transcription the rate
-	// filter drops there as a WAV, so the sound that opened a false segment
+	// CharsSlack is the letters the budget allows whatever the clip length,
+	// so a short real answer passes whole. A pointer for the same reason as
+	// MaxCharsPerSec; read it through CharsSlackOrDefault.
+	CharsSlack *float64 `json:"chars_slack"`
+	// DumpDroppedDir, when set, saves the clip of each transcription the
+	// letter budget drops there as a WAV, so the sound that opened a false segment
 	// can be listened to (see asr.WithDumpDropped). "" (default) disables it.
 	// Independent of vad.debug: the meter floods stderr, the dump should not
 	// need it. A relative path resolves against the working directory.
-	DumpDroppedDir string           `json:"dump_dropped_dir"`
-	GigaAM         GigaAMConfig     `json:"gigaam"`
-	Whisper        WhisperConfig    `json:"whisper"`
-	ElevenLabs     ElevenLabsConfig `json:"elevenlabs"`
+	DumpDroppedDir string `json:"dump_dropped_dir"`
+	// RecordDir, when set, records the whole mic stream of each run there as
+	// one session-<time>.wav (see asr.Recorder), so words the VAD missed can
+	// be found by ear and the session replayed offline. "" (default)
+	// disables it. No size limit or rotation: a file grows ~115 MB an hour.
+	RecordDir  string           `json:"record_dir"`
+	GigaAM     GigaAMConfig     `json:"gigaam"`
+	Whisper    WhisperConfig    `json:"whisper"`
+	ElevenLabs ElevenLabsConfig `json:"elevenlabs"`
 }
 
-// DefaultMaxCharsPerSec sits well above real speech (15–18 runes/s, a lone
-// "Да." 4–9/s) and below the observed hallucination (~44/s).
-const DefaultMaxCharsPerSec = 30
+// DefaultMaxCharsPerSec is the budget's rate: above connected speech
+// (15–18 letters per second of speech) once the pause is subtracted, which
+// is what lets it sit below the old plain-rate cap of 30.
+const DefaultMaxCharsPerSec = 25
 
 // CharsPerSecLimit is the effective rate limit: MaxCharsPerSec when set
 // (0 disables the filter), DefaultMaxCharsPerSec when absent.
@@ -59,6 +72,15 @@ func (c *ASRConfig) CharsPerSecLimit() float64 {
 		return DefaultMaxCharsPerSec
 	}
 	return *c.MaxCharsPerSec
+}
+
+// CharsSlackOrDefault is the effective budget slack: CharsSlack when set,
+// asr.DefaultCharsSlack when absent.
+func (c *ASRConfig) CharsSlackOrDefault() float64 {
+	if c.CharsSlack == nil {
+		return asr.DefaultCharsSlack
+	}
+	return *c.CharsSlack
 }
 
 // GigaAMConfig holds configuration for the local GigaAM batch STT server.

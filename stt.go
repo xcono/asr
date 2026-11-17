@@ -16,6 +16,7 @@ package stt
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -55,7 +56,8 @@ type Service struct {
 	cancel  context.CancelFunc
 	done    chan struct{} // closed when the forwarder goroutine exits
 	closeMu sync.Once
-	closers []func() error // resources New owns (mic, model); nil for NewWith
+	closers []func() error // resources New owns (mic, recorder, model); nil for NewWith
+	record  string         // session WAV New writes; "" when not recording
 }
 
 // New builds the default pipeline from config: the Silero model (pure Go), the
@@ -63,6 +65,8 @@ type Service struct {
 // the same wiring as cmd/vox. It owns those resources and frees them on Close.
 // The mic has its own server connection, so nothing here is process-global; a
 // consumer that already owns the audio device should still use NewWith.
+// With asr.record_dir set the mic is wrapped in an asr.Recorder and the
+// session WAV's path is logged and returned by RecordPath.
 func New(cfg *config.Config) (*Service, error) {
 	rec, err := NewRecognizer(cfg.ASR)
 	if err != nil {
@@ -80,24 +84,63 @@ func New(cfg *config.Config) (*Service, error) {
 		return nil, fmt.Errorf("stt: open capture: %w", err)
 	}
 
-	// Teardown order: stop the mic, then free the model.
-	closers := []func() error{
-		mic.Close,
-		model.Close,
+	// Teardown order: stop the mic (a Read blocked in it returns), then
+	// finalise the recording, then free the model.
+	src, recorder, err := record(mic, cfg.ASR.RecordDir)
+	if err != nil {
+		mic.Close()
+		model.Close()
+		return nil, err
 	}
-	return start(rec, mic, model, cfg.VAD.ToTiming(), closers,
+	closers := []func() error{mic.Close}
+	var recPath string
+	if recorder != nil {
+		closers = append(closers, recorder.Close)
+		recPath = recorder.Path()
+		log.Printf("stt: recording session to %s", recPath)
+	}
+	closers = append(closers, model.Close)
+
+	s := start(rec, src, model, cfg.VAD.ToTiming(), closers,
 		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()),
-		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir)), nil
+		asr.WithCharsSlack(cfg.ASR.CharsSlackOrDefault()),
+		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir))
+	s.record = recPath
+	return s, nil
 }
+
+// record wraps src in an asr.Recorder writing to dir, or returns src as is
+// and a nil Recorder when dir is "" — split from New so the switch is
+// testable without a mic.
+func record(src asr.Source, dir string) (asr.Source, *asr.Recorder, error) {
+	if dir == "" {
+		return src, nil, nil
+	}
+	r, err := asr.NewRecorder(src, dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stt: %w", err)
+	}
+	return r, r, nil
+}
+
+// RecordPath is the session WAV New is writing (asr.record_dir), or "" when
+// not recording or built with NewWith. Event.Offset is a position in it.
+func (s *Service) RecordPath() string { return s.record }
 
 // ListenOption tunes the pipeline NewWith starts; aliased from pkg/asr so a
 // consumer needs only this package.
 type ListenOption = asr.ListenOption
 
-// WithMaxCharsPerSec drops live transcriptions faster than limit runes per
-// second of audio (0 disables); see asr.WithMaxCharsPerSec. New applies
+// WithMaxCharsPerSec drops live transcriptions over the letter budget
+// slack + limit per second of clip beyond the preroll + release pause
+// (0 disables); see asr.WithMaxCharsPerSec. New applies
 // config.ASRConfig.CharsPerSecLimit itself; NewWith filters only when given it.
 func WithMaxCharsPerSec(limit float64) ListenOption { return asr.WithMaxCharsPerSec(limit) }
+
+// WithCharsSlack sets the budget's slack; without it NewWith uses
+// asr.DefaultCharsSlack, the same value config defaults to. New applies
+// config.ASRConfig.CharsSlackOrDefault itself.
+func WithCharsSlack(n float64) ListenOption { return asr.WithCharsSlack(n) }
 
 // WithDumpDropped saves each clip WithMaxCharsPerSec drops to dir as a WAV
 // ("" disables); see asr.WithDumpDropped. New applies
@@ -109,8 +152,10 @@ func WithDumpDropped(dir string) ListenOption { return asr.WithDumpDropped(dir) 
 // no mic) or when ../voices already owns the audio device and
 // feeds STT from a shared source. Timing comes from config.VADConfig.ToTiming
 // or vad.DefaultTiming. Without opts every transcription is emitted; pass
-// WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()) to filter as New does, and
-// WithDumpDropped(cfg.ASR.DumpDroppedDir) to save what it drops.
+// WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()) to filter as New does (and
+// WithCharsSlack(cfg.ASR.CharsSlackOrDefault()) if the config may override
+// the slack), and WithDumpDropped(cfg.ASR.DumpDroppedDir) to save what it
+// drops. To record, wrap src in an asr.Recorder and close it after Close.
 func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing, opts ...ListenOption) *Service {
 	return start(rec, src, det, t, nil, opts...)
 }
@@ -165,7 +210,7 @@ func (s *Service) IsSpeaking() bool { return s.speaking.Load() }
 
 // Transcribe runs a one-shot batch transcription of 16 kHz mono PCM (Batch),
 // reusing the configured provider. Independent of the live capture stream — for
-// transcribing a clip on demand. The chars-per-second filter does not apply:
+// transcribing a clip on demand. The letter-budget filter does not apply:
 // the caller chose the clip, so there is no VAD burst to guard against.
 func (s *Service) Transcribe(ctx context.Context, pcm []int16) (string, error) {
 	return s.rec.Transcribe(ctx, pcm, vad.SampleRate)

@@ -55,6 +55,31 @@ func run(cfg *config.Config) error {
 	}
 	defer mic.Close()
 
+	// --- Session recording (asr.record_dir) ---
+	// The recorder wraps the mic, so it sees exactly the windows Listen reads
+	// and "at=" in the lines below is a position in its file. Deferred after
+	// mic.Close, so it runs first: Listen has returned by then (the event loop
+	// below drains its channel), the queue drains and the WAV header is
+	// patched — the Ctrl-C path ends here, through run's return.
+	var src asr.Source = mic
+	var recorder *asr.Recorder
+	if dir := cfg.ASR.RecordDir; dir != "" {
+		recorder, err = asr.NewRecorder(mic, dir)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := recorder.Close(); err != nil {
+				log.Printf("record: %v", err)
+			}
+			if lost := recorder.Lost(); lost > 0 {
+				log.Printf("note: %.2fs of the recording is silence padded in: the writer fell behind", lost.Seconds())
+			}
+			fmt.Printf("session recorded -> %s\n", recorder.Path())
+		}()
+		src = recorder
+	}
+
 	// --- ASR recognizer ---
 	rec, err := stt.NewRecognizer(cfg.ASR)
 	if err != nil {
@@ -82,26 +107,33 @@ func run(cfg *config.Config) error {
 	}()
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
-	fmt.Printf("ASR: %s%s, max %g chars/s\n", cfg.ASR.Provider, endpoint(rec), cfg.ASR.CharsPerSecLimit())
+	fmt.Printf("ASR: %s%s, %s\n", cfg.ASR.Provider, endpoint(rec), budgetLine(cfg, timing))
 	if d := cfg.ASR.DumpDroppedDir; d != "" {
 		fmt.Printf("dropped clips -> %s\n", d)
 	}
+	if recorder != nil {
+		fmt.Printf("recording session -> %s\n", recorder.Path())
+	}
 
-	events := asr.Listen(ctx, mic, det, rec, timing,
+	events := asr.Listen(ctx, src, det, rec, timing,
 		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()),
+		asr.WithCharsSlack(cfg.ASR.CharsSlackOrDefault()),
 		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir))
 	for ev := range events {
+		// at= is the event's position in the session recording (Event.Offset,
+		// counted in samples read, so it matches the WAV even without one).
 		switch ev.Kind {
 		case asr.SpeechStart:
-			log.Printf("vad: speaking started at %s", ev.Timestamp.Format(time.RFC3339Nano))
+			log.Printf("vad: speaking started at %s at=%.2fs", ev.Timestamp.Format(time.RFC3339Nano), ev.Offset.Seconds())
 		case asr.SpeechEnd:
-			log.Printf("vad: speaking stopped at %s%s", ev.Timestamp.Format(time.RFC3339Nano), ev.VAD)
+			log.Printf("vad: speaking stopped at %s at=%.2fs%s", ev.Timestamp.Format(time.RFC3339Nano), ev.Offset.Seconds(), ev.VAD)
 		case asr.SpeechText:
 			// Scores are logged to choose a threshold from live speech; nothing
-			// is dropped by them. Turns over max_chars_per_sec never get here —
+			// is dropped by them. Turns over the letter budget never get here —
 			// Listen logs them as "asr: dropped ...".
-			log.Printf("stt: %q %.2fs %.1f chars/s%s%s (voice_file_id=%s)",
-				ev.Text, ev.Audio.Seconds(), ev.CharsPerSec, ev.VAD, asr.FormatSegments(ev.Segments), ev.VoiceFileID)
+			log.Printf("stt: %q at=%.2fs %.2fs %d letters <= budget %.1f %.1f chars/s%s%s (voice_file_id=%s)",
+				ev.Text, ev.Offset.Seconds(), ev.Audio.Seconds(), ev.Letters, ev.Budget, ev.CharsPerSec,
+				ev.VAD, asr.FormatSegments(ev.Segments), ev.VoiceFileID)
 		case asr.SpeechError:
 			log.Printf("asr: pipeline error: %v", ev.Err)
 		}
@@ -111,6 +143,17 @@ func run(cfg *config.Config) error {
 		log.Printf("note: dropped %d mic packet(s): the pipeline fell behind", n)
 	}
 	return nil
+}
+
+// budgetLine describes the hallucination filter for the startup line:
+// "letter budget 12 + 25/s beyond a 1.00s pause", or "letter budget off".
+func budgetLine(cfg *config.Config, t vad.Timing) string {
+	rate := cfg.ASR.CharsPerSecLimit()
+	if rate <= 0 {
+		return "letter budget off"
+	}
+	pause := float64(t.PrerollMs+t.ReleaseMs) / 1000
+	return fmt.Sprintf("letter budget %g + %g/s beyond a %.2fs pause", cfg.ASR.CharsSlackOrDefault(), rate, pause)
 }
 
 // endpoint names the server a recognizer talks to, for the startup line. It reads

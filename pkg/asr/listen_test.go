@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,12 +184,12 @@ func listenOnce(rec Recognizer, opts ...ListenOption) []Event {
 	return collectEvents(Listen(context.Background(), src, det, rec, vad.DefaultTiming(), opts...), 2*time.Second)
 }
 
-// credits is the live hallucination: far faster than speech over the ~1 s
-// scripted clip.
+// credits is the live hallucination: 41 letters, far over the slack-only
+// budget of the scripted clip (shorter than the 1 s pause).
 const credits = "Редактор субтитров А.Семкин Корректор А.Егорова"
 
-// TestListenDropsFastText: a transcription over the rate limit is not emitted,
-// so the turn ends at SpeechEnd.
+// TestListenDropsFastText: a transcription over the letter budget is not
+// emitted, so the turn ends at SpeechEnd.
 func TestListenDropsFastText(t *testing.T) {
 	got := listenOnce(fakeRecognizer{text: credits + " " + credits}, WithMaxCharsPerSec(30))
 	if len(got) != 2 || got[0].Kind != SpeechStart || got[1].Kind != SpeechEnd {
@@ -197,7 +198,7 @@ func TestListenDropsFastText(t *testing.T) {
 }
 
 // TestListenKeepsNormalText: speech-rate text passes the filter and carries
-// the clip length and rate it was judged by.
+// the clip length, rate, letters and budget it was judged by.
 func TestListenKeepsNormalText(t *testing.T) {
 	got := listenOnce(fakeRecognizer{text: " Да. "}, WithMaxCharsPerSec(30))
 	if len(got) != 3 || got[2].Kind != SpeechText {
@@ -209,6 +210,12 @@ func TestListenKeepsNormalText(t *testing.T) {
 	}
 	if want := 3 / ev.Audio.Seconds(); ev.CharsPerSec != want {
 		t.Errorf("CharsPerSec = %v, want %v (3 runes of trimmed text)", ev.CharsPerSec, want)
+	}
+	if ev.Letters != 2 {
+		t.Errorf("Letters = %d, want 2 (the dot does not count)", ev.Letters)
+	}
+	if want := letterBudget(ev.Audio, vad.DefaultTiming(), DefaultCharsSlack, 30); ev.Budget != want {
+		t.Errorf("Budget = %v, want %v", ev.Budget, want)
 	}
 	if ev.Segments != nil {
 		t.Errorf("Segments = %v, want nil for a plain Recognizer", ev.Segments)
@@ -229,6 +236,9 @@ func TestListenFilterOff(t *testing.T) {
 		}
 		if got[2].CharsPerSec <= 30 {
 			t.Errorf("%s: CharsPerSec = %v, want the fast rate it was let through at", name, got[2].CharsPerSec)
+		}
+		if !math.IsInf(got[2].Budget, 1) || got[2].Letters != 82 {
+			t.Errorf("%s: Letters, Budget = %d, %v; want 82, +Inf", name, got[2].Letters, got[2].Budget)
 		}
 	}
 }
@@ -419,5 +429,143 @@ func TestListenDumpErrorKeepsStream(t *testing.T) {
 	}
 	if len(rec.got) != 2 {
 		t.Errorf("recogniser called %d times, want 2", len(rec.got))
+	}
+}
+
+// checkpoints are clips from live logs: two Whisper hallucinations that a
+// plain 30 runes/s cap let through or only just caught, and three real
+// answers, the short ones in clips about as long as the hallucinations.
+var checkpoints = []struct {
+	text    string
+	clip    time.Duration
+	letters int
+	budget  float64
+	drop    bool
+}{
+	{"Продолжение следует", 1060 * time.Millisecond, 18, 13.5, true},
+	{"Редактор субтитров А.Семкин Корректор А.Егорова", 1180 * time.Millisecond, 41, 16.5, true},
+	{"Я не знаю.", 1150 * time.Millisecond, 7, 15.75, false},
+	{"Не знаю...", 1440 * time.Millisecond, 6, 23, false},
+	{"Обычная речь 3-4 фразы в привычном темпе – это лог наценок для настоящей речи.", 6720 * time.Millisecond, 62, 155, false},
+}
+
+// TestLetterBudgetCheckpoints: at the config defaults (slack 12, 25/s, 1 s
+// pause from the default Timing) the budget drops exactly the hallucinations.
+func TestLetterBudgetCheckpoints(t *testing.T) {
+	tm := vad.DefaultTiming()
+	if tm.PrerollMs+tm.ReleaseMs != 1000 {
+		t.Fatalf("checkpoints assume a 1 s pause, Timing gives %d ms", tm.PrerollMs+tm.ReleaseMs)
+	}
+	for _, c := range checkpoints {
+		n := countLetters(c.text)
+		b := letterBudget(c.clip, tm, DefaultCharsSlack, 25)
+		if n != c.letters || math.Abs(b-c.budget) > 1e-9 {
+			t.Errorf("%q: %d letters, budget %v; want %d, %v", c.text, n, b, c.letters, c.budget)
+		}
+		if drop := float64(n) > b; drop != c.drop {
+			t.Errorf("%q: drop = %v, want %v", c.text, drop, c.drop)
+		}
+	}
+}
+
+// TestLetterBudgetTiming: the pause comes from the Timing, so a longer
+// preroll + release buys no extra letters for the silence it adds, and a
+// clip shorter than the pause gets the slack alone.
+func TestLetterBudgetTiming(t *testing.T) {
+	tm := vad.DefaultTiming()
+	tm.PrerollMs, tm.ReleaseMs = 500, 1500 // 2 s pause
+	for _, c := range []struct {
+		clip time.Duration
+		want float64
+	}{
+		{1060 * time.Millisecond, 12}, // shorter than the pause: slack only
+		{2 * time.Second, 12},
+		{3 * time.Second, 37},
+	} {
+		if b := letterBudget(c.clip, tm, 12, 25); math.Abs(b-c.want) > 1e-9 {
+			t.Errorf("clip %v: budget %v, want %v", c.clip, b, c.want)
+		}
+	}
+}
+
+// TestListenBudgetCheckpoints runs the checkpoint texts through Listen at the
+// config defaults. The scripted clip is shorter than the 1 s pause, so its
+// budget is the slack alone: the 7- and 6-letter answers pass, the
+// hallucinations are dropped.
+func TestListenBudgetCheckpoints(t *testing.T) {
+	for _, c := range checkpoints[:4] {
+		got := listenOnce(fakeRecognizer{text: c.text}, WithMaxCharsPerSec(25))
+		if c.drop {
+			if len(got) != 2 {
+				t.Errorf("%q: got %+v, want it dropped", c.text, got)
+			}
+			continue
+		}
+		if len(got) != 3 || got[2].Text != c.text || got[2].Budget != DefaultCharsSlack || got[2].Letters != c.letters {
+			t.Errorf("%q: got %+v, want it kept with budget %d", c.text, got, DefaultCharsSlack)
+		}
+	}
+}
+
+// TestListenCharsSlack: the slack option replaces the default.
+func TestListenCharsSlack(t *testing.T) {
+	text := "Продолжение следует" // 18 letters
+	if got := listenOnce(fakeRecognizer{text: text}, WithMaxCharsPerSec(25), WithCharsSlack(20)); len(got) != 3 || got[2].Budget != 20 {
+		t.Errorf("slack 20: got %+v, want kept with budget 20", got)
+	}
+	if got := listenOnce(fakeRecognizer{text: "Я не знаю."}, WithMaxCharsPerSec(25), WithCharsSlack(5)); len(got) != 2 {
+		t.Errorf("slack 5: got %+v, want the 7 letters dropped", got)
+	}
+}
+
+// TestListenBudgetUsesTiming: Listen charges the pause of the Timing it runs
+// with — a release tail longer than the default lengthens the clip, and the
+// budget grows only by what the clip exceeds that Timing's pause.
+func TestListenBudgetUsesTiming(t *testing.T) {
+	tm := vad.DefaultTiming()
+	tm.ReleaseMs = 1600 // clip ~1.7 s, pause 1.9 s: slack only
+	probs := make([]float32, 0)
+	for range tm.OnsetWindows() {
+		probs = append(probs, 0.9)
+	}
+	for range tm.ReleaseWindows() + 3 {
+		probs = append(probs, 0)
+	}
+	src := &fakeSource{frames: len(probs), buf: make([]int16, vad.Window)}
+	got := collectEvents(Listen(context.Background(), src, &fakeDetector{probs: probs},
+		fakeRecognizer{text: "Продолжение следует"}, tm, WithMaxCharsPerSec(25)), 2*time.Second)
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want dropped: 18 letters over a slack-only budget", got)
+	}
+
+	// The same clip judged with the default 1 s pause would have passed:
+	// that is what a Timing-blind budget would do.
+	clip := time.Duration(tm.OnsetWindows()+tm.ReleaseWindows()) * time.Duration(vad.Window) * time.Second / vad.SampleRate
+	if b := letterBudget(clip, vad.DefaultTiming(), DefaultCharsSlack, 25); b < 18 {
+		t.Fatalf("test premise: default-Timing budget %v for %v should admit 18 letters", b, clip)
+	}
+}
+
+// TestListenOffsets: Offset counts samples read through the confirming
+// window — onset after OnsetWindows, offset ReleaseWindows later — and
+// SpeechText repeats its SpeechEnd's.
+func TestListenOffsets(t *testing.T) {
+	tm := vad.DefaultTiming()
+	lead := 5 // silent windows before the onset
+	probs := make([]float32, lead)
+	probs = append(probs, speechThenSilence()...)
+	src := &fakeSource{frames: len(probs), buf: make([]int16, vad.Window)}
+	got := collectEvents(Listen(context.Background(), src, &fakeDetector{probs: probs},
+		fakeRecognizer{text: "да"}, tm), 2*time.Second)
+	if len(got) != 3 {
+		t.Fatalf("got %+v, want start,end,text", got)
+	}
+	win := func(n int) time.Duration { return time.Duration(n*vad.Window) * time.Second / vad.SampleRate }
+	start := lead + tm.OnsetWindows()
+	want := []time.Duration{win(start), win(start + tm.ReleaseWindows()), win(start + tm.ReleaseWindows())}
+	for i, w := range want {
+		if got[i].Offset != w {
+			t.Errorf("%v Offset = %v, want %v", got[i].Kind, got[i].Offset, w)
+		}
 	}
 }

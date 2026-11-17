@@ -49,12 +49,16 @@ Provider defaults to `"gigaam"` in code; the checked-in `config.json` selects
 `"whisper"`. `gigaam` and `whisper` share `asr.Transcriber` (`language`/`prompt`
 are sent only when non-empty); `"elevenlabs"` is `pkg/asr/elevenlabs.go`. All
 three are built by `stt.NewRecognizer` — the one provider switch, shared with
-`xcono/voices`. `asr.max_chars_per_sec` (default 30, `0` off) is a pointer
-field read through `ASRConfig.CharsPerSecLimit()`, so an explicit `0` differs
-from absent and configs composed without `Load` (voices) still get the default.
-`asr.dump_dropped_dir` (default `""`, off) saves each clip the rate filter
-drops as a WAV; the checked-in `config.json` sets `"dropped"` (git-ignored).
-It is independent of `vad.debug`. `README.md` has the parameter tables.
+`xcono/voices`. The letter budget is `asr.chars_slack` (default 12) +
+`asr.max_chars_per_sec` (default 25, `0` turns the filter off) per second of
+clip beyond `preroll_ms + release_ms`. Both are pointer fields read through
+`ASRConfig.CharsSlackOrDefault()` / `CharsPerSecLimit()`, so an explicit `0`
+differs from absent and configs composed without `Load` (voices) still get
+the defaults. `asr.dump_dropped_dir` (default `""`, off) saves each clip the
+budget drops as a WAV; the checked-in `config.json` sets `"dropped"`
+(git-ignored). It is independent of `vad.debug`. `asr.record_dir` (default
+`""`, off) records the whole mic stream as one `session-<time>.wav` per run;
+the checked-in `config.json` sets `"recordings"` (git-ignored). `README.md` has the parameter tables.
 
 ## Architecture
 
@@ -66,15 +70,25 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
   `NewWith` takes caller-owned components.
 - `cmd/vox/main.go` — load config → build model, capture and recogniser → range
   over `asr.Listen` → log. `vaddebug.go` wraps the `Detector` to print the
-  probability meter without changing results.
+  probability meter without changing results; under `asr.record_dir` the mic
+  is wrapped in an `asr.Recorder` the same way, and its `Close` is deferred
+  so the Ctrl-C path (cancel → Listen returns → `run` returns) finalises the
+  WAV header.
 - `pkg/asr` — `Listen` (`listen.go`) is the pipeline controller: it owns the
   FSM, preroll ring and utterance buffer, and transcribes in a goroutine so a
   slow recogniser never stalls capture. The channel closes when the source
   errors or the context is cancelled. `WithMaxCharsPerSec` (a variadic
-  `ListenOption`, so existing calls compile) drops a transcription whose
-  runes per second of clip exceed the limit — Whisper's subtitle-credit
-  hallucinations — logging `asr: dropped ...`; that turn ends at `SpeechEnd`.
-  `SpeechText` carries `Audio`, `CharsPerSec` and `Segments` for logs;
+  `ListenOption`, so existing calls compile) turns on the letter budget:
+  a transcription whose letters+digits exceed `slack + rate × max(0, clip −
+  (PrerollMs + ReleaseMs))` is dropped — Whisper's subtitle-credit and
+  "Продолжение следует" hallucinations — logging `asr: dropped ...`; that turn
+  ends at `SpeechEnd`. A budget, not a plain rate, because the ~1 s pause in
+  every clip dilutes a short clip's rate below that of fast real speech.
+  `WithCharsSlack` sets the slack (`DefaultCharsSlack` = 12 when absent).
+  `SpeechText` carries `Audio`, `CharsPerSec`, `Letters`, `Budget` (+Inf when
+  off) and `Segments` for logs; every event carries `Offset` — samples read
+  from the `Source` through the confirming window (SpeechText: its clip end),
+  the time base of the session recording;
   `SpeechEnd` and `SpeechText` carry `VAD` (`VADStats`: peak probability and
   windows >= `Threshold` out of all windows of the clip, preroll included —
   a parallel probability ring mirrors the preroll, so it assumes one window
@@ -83,15 +97,19 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
   capture loop; a write error is logged and ignored. A
   recogniser implementing the optional `ScoredRecognizer` (`*Transcriber`)
   supplies `Segments` (verbose_json `no_speech_prob` / `avg_logprob`); scores
-  are logged by `cmd/vox`, never acted on. Also here: the consumer-side interfaces
+  are logged by `cmd/vox`, never acted on. `Recorder` (`record.go`) is a
+  `Source` wrapper that copies each window into a queue drained by a writer
+  goroutine (`audio.WAVWriter`); a full queue drops the window and the writer
+  pads the gap with silence so `Offset` stays aligned with the file. Also here: the consumer-side interfaces
   `Source`/`Detector`/`Recognizer`, `Transcriber` (batch, OpenAI-compatible
   multipart WAV upload), `ElevenLabs`, and `StreamSession` (WebSocket streaming).
 - `pkg/vad` — `Model`, hysteresis `FSM`, `Preroll` ring, `EndOfTurn` countdown,
   `Timing` and the tuned consts.
-- `pkg/audio` — PulseAudio `Capture`, PCM16LE / WAV codec, `ResampleLinear`.
+- `pkg/audio` — PulseAudio `Capture`, PCM16LE / WAV codec, streaming
+  `WAVWriter` (placeholder lengths patched on `Close`), `ResampleLinear`.
 - `pkg/config` — schema + `Load`. `VADConfig.ToTiming()` lives here so all
-  config-schema concerns stay in one package; `config` imports `vad`, never the
-  reverse.
+  config-schema concerns stay in one package; `config` imports `vad` and `asr`
+  (for `asr.DefaultCharsSlack`), never the reverse.
 - `llm/` + `docker.*.yaml` — the external STT servers (whisper.cpp, GigaAM,
   Qwen3-ASR). Whisper's HTTP contract is in `llm/whisper/README.md`.
 
@@ -166,10 +184,16 @@ output is float32 [-1,1], not int16.
 - **`Transcriber.Verbose` is whisper-only.** The GigaAM server answers 400 to
   any `response_format` but `json|text`; `NewRecognizer` sets `Verbose` only
   for `whisper`.
-- **`stt.NewWith` does not filter or dump by default.** Pass
-  `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` and
-  `stt.WithDumpDropped(cfg.DumpDroppedDir)`; `stt.New` and `vox` do both
-  from config. `Service.Transcribe` (one-shot) is never filtered.
+- **`stt.NewWith` does not filter, dump or record by default.** Pass
+  `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` (slack defaults to 12;
+  add `stt.WithCharsSlack(cfg.CharsSlackOrDefault())` to honour a configured
+  one) and `stt.WithDumpDropped(cfg.DumpDroppedDir)`; to record, wrap the
+  source in `asr.NewRecorder` and close it after the service. `stt.New` and
+  `vox` do all of it from config. `Service.Transcribe` (one-shot) is never
+  filtered.
+- **`Recorder.Close` must run after `Listen` stops reading** for the file to
+  hold every window; a `Read` racing `Close` is safe but unrecorded. A
+  session file has no size limit or rotation (~115 MB/hour).
 - **ElevenLabs needs `elevenlabs.api_key`**, and `stt.NewRecognizer` does not
   validate it — a missing key fails at request time (401), not at startup.
 

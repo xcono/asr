@@ -11,6 +11,7 @@
   "asr": {
     "provider": "whisper",
     "dump_dropped_dir": "dropped",
+    "record_dir": "recordings",
     "gigaam": {
       "base_url": "http://localhost:8008/v1",
       "model": ""

@@ -3,6 +3,8 @@ package stt
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -204,5 +206,35 @@ func TestRecognizerElevenLabs(t *testing.T) {
 func TestRecognizerUnknownProvider(t *testing.T) {
 	if _, err := NewRecognizer(config.ASRConfig{Provider: "nope"}); err == nil {
 		t.Fatal("expected an error for an unknown provider, got nil")
+	}
+}
+
+// TestRecordOff: without record_dir the source is used as is and nothing is
+// written (checked in an empty working directory).
+func TestRecordOff(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+	src := &fakeSource{}
+	got, r, err := record(src, "")
+	if err != nil || r != nil || got != asr.Source(src) {
+		t.Fatalf("record(src, \"\") = %v, %v, %v; want src, nil, nil", got, r, err)
+	}
+	if files, _ := os.ReadDir(wd); len(files) != 0 {
+		t.Fatalf("working dir has %v, want empty", files)
+	}
+}
+
+// TestRecordOn: with record_dir the source is a Recorder writing there.
+func TestRecordOn(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	got, r, err := record(&fakeSource{}, dir)
+	if err != nil || r == nil || got != asr.Source(r) {
+		t.Fatalf("record = %v, %v, %v; want the Recorder", got, r, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(r.Path()) != dir {
+		t.Fatalf("Path = %s, want under %s", r.Path(), dir)
 	}
 }
