@@ -55,11 +55,16 @@ three are built by `stt.NewRecognizer` — the one provider switch, shared with
 clip beyond `preroll_ms + release_ms`. Both are pointer fields read through
 `ASRConfig.CharsSlackOrDefault()` / `CharsPerSecLimit()`, so an explicit `0`
 differs from absent and configs composed without `Load` (voices) still get
-the defaults. `asr.dump_dropped_dir` (default `""`, off) saves each clip the
-budget drops as a WAV; the checked-in `config.json` sets `"dropped"`
+the defaults. `asr.dump_dropped_dir` (default `""`, off) saves each clip either
+filter drops as a WAV; the checked-in `config.json` sets `"dropped"`
 (git-ignored). It is independent of `vad.debug`. `asr.record_dir` (default
 `""`, off) records the whole mic stream as one `session-<time>.wav` per run;
-the checked-in `config.json` sets `"recordings"` (git-ignored). `README.md` has the parameter tables.
+the checked-in `config.json` sets `"recordings"` (git-ignored).
+`asr.hallucination_phrases` is the phrase list (second filter line); read it
+through `ASRConfig.HallucinationPhrasesOrDefault()`: absent (nil) =
+`asr.DefaultHallucinationPhrases()`, `[]` = off, a list replaces the default
+(no merge). The checked-in `config.json` leaves it absent. `README.md` has
+the parameter tables.
 
 ## Architecture
 
@@ -91,6 +96,14 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
   ends at `SpeechEnd`. A budget, not a plain rate, because the ~1 s pause in
   every clip dilutes a short clip's rate below that of fast real speech.
   `WithCharsSlack` sets the slack (`DefaultCharsSlack` = 12 when absent).
+  `WithHallucinationPhrases` (`phrases.go`) is the second line, checked only
+  when the budget passed: text and entries are normalised to whole words
+  (lower case, ё→е, non-letters/digits are breaks); a `*`-prefixed marker
+  drops the text on any occurrence, a plain phrase only when the matched
+  phrases cover >= half its letters (so "продолжение следует" inside a long
+  real sentence passes). `dropReason` builds the log reason: the budget's
+  `N letters > budget X` (unchanged wording) or `phrase "<entries>" c/N
+  letters, budget X` — one reason per line, budget first.
   `SpeechText` carries `Audio`, `CharsPerSec`, `Letters`, `Budget` (+Inf when
   off) and `Segments` for logs; every event carries `Offset` — samples read
   from the `Source` through the confirming window (SpeechText: its clip end),
@@ -201,7 +214,8 @@ output is float32 [-1,1], not int16.
 - **`stt.NewWith` does not filter, dump or record by default.** Pass
   `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` (slack defaults to 12;
   add `stt.WithCharsSlack(cfg.CharsSlackOrDefault())` to honour a configured
-  one) and `stt.WithDumpDropped(cfg.DumpDroppedDir)`; to record, wrap the
+  one), `stt.WithHallucinationPhrases(cfg.HallucinationPhrasesOrDefault())`
+  and `stt.WithDumpDropped(cfg.DumpDroppedDir)`; to record, wrap the
   source in `asr.NewRecorder` and close it after the service. `stt.New` and
   `vox` do all of it from config. `Service.Transcribe` (one-shot) is never
   filtered.

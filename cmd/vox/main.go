@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -107,7 +108,7 @@ func run(cfg *config.Config) error {
 	}()
 
 	fmt.Println("Listening... (Ctrl-C to quit)")
-	fmt.Printf("ASR: %s%s, %s\n", cfg.ASR.Provider, endpoint(rec), budgetLine(cfg, timing))
+	fmt.Printf("ASR: %s%s, %s, %s\n", cfg.ASR.Provider, endpoint(rec), budgetLine(cfg, timing), phraseLine(cfg))
 	if d := cfg.ASR.DumpDroppedDir; d != "" {
 		fmt.Printf("dropped clips -> %s\n", d)
 	}
@@ -118,7 +119,8 @@ func run(cfg *config.Config) error {
 	events := asr.Listen(ctx, src, det, rec, timing,
 		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()),
 		asr.WithCharsSlack(cfg.ASR.CharsSlackOrDefault()),
-		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir))
+		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir),
+		asr.WithHallucinationPhrases(cfg.ASR.HallucinationPhrasesOrDefault()))
 	for ev := range events {
 		// at= is the event's position in the session recording (Event.Offset,
 		// counted in samples read, so it matches the WAV even without one).
@@ -129,8 +131,9 @@ func run(cfg *config.Config) error {
 			log.Printf("vad: speaking stopped at %s at=%.2fs%s", ev.Timestamp.Format(time.RFC3339Nano), ev.Offset.Seconds(), ev.VAD)
 		case asr.SpeechText:
 			// Scores are logged to choose a threshold from live speech; nothing
-			// is dropped by them. Turns over the letter budget never get here —
-			// Listen logs them as "asr: dropped ...".
+			// is dropped by them. Turns over the letter budget or holding a
+			// hallucination phrase never get here — Listen logs them as
+			// "asr: dropped ...".
 			log.Printf("stt: %q at=%.2fs %.2fs %d letters <= budget %.1f %.1f chars/s%s%s (voice_file_id=%s)",
 				ev.Text, ev.Offset.Seconds(), ev.Audio.Seconds(), ev.Letters, ev.Budget, ev.CharsPerSec,
 				ev.VAD, asr.FormatSegments(ev.Segments), ev.VoiceFileID)
@@ -154,6 +157,22 @@ func budgetLine(cfg *config.Config, t vad.Timing) string {
 	}
 	pause := float64(t.PrerollMs+t.ReleaseMs) / 1000
 	return fmt.Sprintf("letter budget %g + %g/s beyond a %.2fs pause", cfg.ASR.CharsSlackOrDefault(), rate, pause)
+}
+
+// phraseLine describes the phrase filter for the startup line:
+// "hallucination phrases 6 (2 markers)", or "hallucination phrases off".
+func phraseLine(cfg *config.Config) string {
+	phrases := cfg.ASR.HallucinationPhrasesOrDefault()
+	if len(phrases) == 0 {
+		return "hallucination phrases off"
+	}
+	markers := 0
+	for _, p := range phrases {
+		if strings.HasPrefix(strings.TrimSpace(p), asr.MarkerPrefix) {
+			markers++
+		}
+	}
+	return fmt.Sprintf("hallucination phrases %d (%d markers)", len(phrases), markers)
 }
 
 // endpoint names the server a recognizer talks to, for the startup line. It reads

@@ -104,7 +104,8 @@ func New(cfg *config.Config) (*Service, error) {
 	s := start(rec, src, model, cfg.VAD.ToTiming(), closers,
 		asr.WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()),
 		asr.WithCharsSlack(cfg.ASR.CharsSlackOrDefault()),
-		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir))
+		asr.WithDumpDropped(cfg.ASR.DumpDroppedDir),
+		asr.WithHallucinationPhrases(cfg.ASR.HallucinationPhrasesOrDefault()))
 	s.record = recPath
 	return s, nil
 }
@@ -142,7 +143,16 @@ func WithMaxCharsPerSec(limit float64) ListenOption { return asr.WithMaxCharsPer
 // config.ASRConfig.CharsSlackOrDefault itself.
 func WithCharsSlack(n float64) ListenOption { return asr.WithCharsSlack(n) }
 
-// WithDumpDropped saves each clip WithMaxCharsPerSec drops to dir as a WAV
+// WithHallucinationPhrases drops live transcriptions that contain a known
+// hallucination phrase (nil or empty disables); see
+// asr.WithHallucinationPhrases. New applies
+// config.ASRConfig.HallucinationPhrasesOrDefault itself; NewWith filters only
+// when given it — like the budget, so a caller sees every filter it runs.
+func WithHallucinationPhrases(phrases []string) ListenOption {
+	return asr.WithHallucinationPhrases(phrases)
+}
+
+// WithDumpDropped saves each clip either filter drops to dir as a WAV
 // ("" disables); see asr.WithDumpDropped. New applies
 // config.ASRConfig.DumpDroppedDir itself; NewWith dumps only when given it.
 func WithDumpDropped(dir string) ListenOption { return asr.WithDumpDropped(dir) }
@@ -154,8 +164,9 @@ func WithDumpDropped(dir string) ListenOption { return asr.WithDumpDropped(dir) 
 // or vad.DefaultTiming. Without opts every transcription is emitted; pass
 // WithMaxCharsPerSec(cfg.ASR.CharsPerSecLimit()) to filter as New does (and
 // WithCharsSlack(cfg.ASR.CharsSlackOrDefault()) if the config may override
-// the slack), and WithDumpDropped(cfg.ASR.DumpDroppedDir) to save what it
-// drops. To record, wrap src in an asr.Recorder and close it after Close.
+// the slack), WithHallucinationPhrases(cfg.ASR.HallucinationPhrasesOrDefault())
+// for the phrase list, and WithDumpDropped(cfg.ASR.DumpDroppedDir) to save
+// what they drop. To record, wrap src in an asr.Recorder and close it after Close.
 func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing, opts ...ListenOption) *Service {
 	return start(rec, src, det, t, nil, opts...)
 }
@@ -210,7 +221,8 @@ func (s *Service) IsSpeaking() bool { return s.speaking.Load() }
 
 // Transcribe runs a one-shot batch transcription of 16 kHz mono PCM (Batch),
 // reusing the configured provider. Independent of the live capture stream — for
-// transcribing a clip on demand. The letter-budget filter does not apply:
+// transcribing a clip on demand. Neither the letter budget nor the phrase
+// list applies:
 // the caller chose the clip, so there is no VAD burst to guard against.
 func (s *Service) Transcribe(ctx context.Context, pcm []int16) (string, error) {
 	return s.rec.Transcribe(ctx, pcm, vad.SampleRate)

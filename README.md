@@ -151,6 +151,7 @@ All providers are batch: each VAD-segmented utterance is sent as one request.
 | `provider` | `gigaam` | `gigaam`, `whisper` or `elevenlabs` |
 | `max_chars_per_sec` | 25 | Rate of the letter budget: letters allowed per second of clip beyond the preroll + release pause; `0` turns the filter off |
 | `chars_slack` | 12 | Letters the budget allows whatever the clip length |
+| `hallucination_phrases` | see [below](#hallucination-phrases) | Drop a transcription within the budget that contains one of these; a leading `*` marks an entry that fires anywhere. Replaces the default list; `[]` turns the filter off |
 | `dump_dropped_dir` | `""` | Save each dropped clip here as a 16 kHz mono 16-bit WAV (created if missing; relative to the working directory); `""` disables. The checked-in `config.json` uses `dropped/`, which git ignores |
 | `record_dir` | `""` | Record the whole mic stream of each run here as one `session-<time>.wav` (16 kHz mono 16-bit); `""` disables. No size limit or rotation (~115 MB/hour). The checked-in `config.json` uses `recordings/`, which git ignores |
 
@@ -190,10 +191,56 @@ and produces `SpeechEnd` with no `SpeechText`. `wav=` appears only when
 `dump_dropped_dir` is set and the write succeeded (a failure is logged as
 `asr: dump dropped clip: <err>` and the pipeline carries on). The time in
 the file name is taken just before the line is logged, so it matches the log
-timestamp. Listen to these clips to learn what opened the segment. `stt.New` and `vox` apply the filter and the dump;
+timestamp. Listen to these clips to learn what opened the segment. `stt.New` and `vox` apply both filters and the dump;
 `stt.NewWith` does each only when passed `stt.WithMaxCharsPerSec(...)` /
-`stt.WithDumpDropped(...)` (its slack is 12 unless `stt.WithCharsSlack(...)`
-is passed too); the one-shot `Service.Transcribe` never filters.
+`stt.WithHallucinationPhrases(...)` / `stt.WithDumpDropped(...)` (its slack
+is 12 unless `stt.WithCharsSlack(...)` is passed too); the one-shot
+`Service.Transcribe` never filters.
+
+#### Hallucination phrases
+
+The budget cannot drop a credit on a clip long enough to afford its letters:
+on a clear "доделай" (1.50 s, VAD peak 0.99) Whisper returned "Добавил
+субтитры DimaTorzok", 25 letters against a budget of 24.6, and Whisper's
+scores did not tell it from speech. A transcription the budget lets through
+is therefore checked against a list of phrases Whisper was seen to invent.
+The default list (`asr.DefaultHallucinationPhrases`):
+
+| Entry | Kind |
+|-------|------|
+| `*DimaTorzok` | marker |
+| `*Редактор субтитров` | marker |
+| `Субтитры создавал` | phrase |
+| `Добавил субтитры` | phrase |
+| `Корректор` | phrase |
+| `Продолжение следует` | phrase |
+
+Text and entries are compared as words: lower case, `ё` = `е`, every run of
+characters other than letters and digits (punctuation, spaces, the dot of
+`А.Семкин`) is a word break, and an entry matches a run of whole words — so
+`Корректор` does not fire on "корректора". A **marker** (leading `*`) drops
+the text wherever it occurs: no one says it to a voice agent. A **phrase**
+is ordinary speech a person may use inside a sentence ("я думаю,
+продолжение следует, но…"), so the phrases found must together cover at
+least half of the text's letters: "Продолжение следует..." (18 of 18) and
+"Корректор А.Егорова" (9 of 17) are dropped, a longer sentence around them is
+not. "Подписывайтесь, ставьте лайки" is not on the list — it was said for
+real and transcribed correctly.
+
+`hallucination_phrases` in the config replaces the whole list — copy the
+default above to extend it; `[]` turns the filter off; absent means the
+default. The budget is checked first: a turn over it is logged with the
+budget as its reason even if a phrase also matches. A phrase drop is logged
+as
+
+```
+asr: dropped "Добавил субтитры DimaTorzok": at=7.80s 1.50s, phrase "*DimaTorzok" 10/25 letters, budget 24.6, 18.0 chars/s vad_peak=0.99 speech_win=30/47 wav=dropped/dropped-20261118-045012.345.wav
+```
+
+with the entries that decided it (as configured) and the letters they cover
+out of the text's; the clip is saved under `dump_dropped_dir` as for a
+budget drop. `vox` prints `hallucination phrases 6 (2 markers)` or
+`hallucination phrases off` on its `ASR:` startup line.
 
 `vad_peak` is Silero's highest window probability in the clip and
 `speech_win` the windows at or above `threshold` out of all its 32 ms windows

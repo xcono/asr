@@ -50,6 +50,17 @@ type ASRConfig struct {
 	// Independent of vad.debug: the meter floods stderr, the dump should not
 	// need it. A relative path resolves against the working directory.
 	DumpDroppedDir string `json:"dump_dropped_dir"`
+	// HallucinationPhrases is the second line of the filter: a live
+	// transcription within the letter budget is still dropped when it
+	// contains one of these (see asr.WithHallucinationPhrases; a leading
+	// "*" marks an entry that drops the text wherever it occurs, the others
+	// must cover at least half its letters). The list replaces the default
+	// rather than extending it, so it is the whole truth in one place: absent
+	// (nil) is asr.DefaultHallucinationPhrases, an explicit [] turns the
+	// filter off, and to extend the default copy it and add. A plain slice,
+	// not a pointer: JSON already tells absent (nil) from [] (empty, non-nil).
+	// Read it through HallucinationPhrasesOrDefault.
+	HallucinationPhrases []string `json:"hallucination_phrases"`
 	// RecordDir, when set, records the whole mic stream of each run there as
 	// one session-<time>.wav (see asr.Recorder), so words the VAD missed can
 	// be found by ear and the session replayed offline. "" (default)
@@ -81,6 +92,17 @@ func (c *ASRConfig) CharsSlackOrDefault() float64 {
 		return asr.DefaultCharsSlack
 	}
 	return *c.CharsSlack
+}
+
+// HallucinationPhrasesOrDefault is the effective phrase list:
+// HallucinationPhrases when set (empty turns the filter off),
+// asr.DefaultHallucinationPhrases when nil — also for a config built
+// without Load.
+func (c *ASRConfig) HallucinationPhrasesOrDefault() []string {
+	if c.HallucinationPhrases == nil {
+		return asr.DefaultHallucinationPhrases()
+	}
+	return c.HallucinationPhrases
 }
 
 // GigaAMConfig holds configuration for the local GigaAM batch STT server.

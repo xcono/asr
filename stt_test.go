@@ -238,3 +238,23 @@ func TestRecordOn(t *testing.T) {
 		t.Fatalf("Path = %s, want under %s", r.Path(), dir)
 	}
 }
+
+// TestNewWithPhrases: NewWith runs the phrase filter only when given it —
+// without options a listed phrase is emitted, as for the letter budget.
+func TestNewWithPhrases(t *testing.T) {
+	for name, c := range map[string]struct {
+		opts []ListenOption
+		want int
+	}{
+		"no option":    {nil, 3},
+		"default list": {[]ListenOption{WithHallucinationPhrases(asr.DefaultHallucinationPhrases())}, 2},
+	} {
+		probs := onsetThenSilence()
+		src := &fakeSource{frames: len(probs), buf: make([]int16, vad.Window)}
+		svc := NewWith(src, &fakeDetector{probs: probs}, fakeRecognizer{text: "Продолжение следует..."}, vad.DefaultTiming(), c.opts...)
+		if got := drain(t, svc.Events()); len(got) != c.want {
+			t.Errorf("%s: got %d events %+v, want %d", name, len(got), got, c.want)
+		}
+		svc.Close()
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -139,6 +140,7 @@ type listenOptions struct {
 	maxCharsPerSec float64
 	charsSlack     float64
 	dumpDir        string
+	phrases        phraseFilter
 }
 
 // DefaultCharsSlack is the letters a clip may carry beyond its rate budget
@@ -182,10 +184,26 @@ func WithCharsSlack(n float64) ListenOption {
 	return func(o *listenOptions) { o.charsSlack = n }
 }
 
+// WithHallucinationPhrases turns on the second line of the hallucination
+// filter: a transcription the letter budget let through is still dropped when
+// it contains one of phrases (see DefaultHallucinationPhrases for the entry
+// syntax and phraseFilter.match for the rule). nil or empty disables it.
+//
+// It exists because the budget cannot catch a credit on a clip long enough to
+// afford its letters: on a clear "доделай" (1.50 s, VAD peak 0.99) Whisper
+// returned "Добавил субтитры DimaTorzok", 25 letters against a budget of 24.6
+// — 30 ms more audio and it would have passed. Whisper's own scores
+// (no_speech_prob, avg_logprob) did not tell it from speech either; the
+// words themselves do. The budget is checked first, so a turn over it is
+// logged with the budget as its reason whether or not a phrase also matches.
+func WithHallucinationPhrases(phrases []string) ListenOption {
+	return func(o *listenOptions) { o.phrases = newPhraseFilter(phrases) }
+}
+
 // WithDumpDropped writes the clip of every transcription WithMaxCharsPerSec
-// drops to dir as a 16 kHz mono 16-bit WAV, named by the time of the drop
-// (dropped-20261118-034512.345.wav), and puts the path in the "asr: dropped"
-// line; "" disables it. It exists so a person can listen to what opened a
+// or WithHallucinationPhrases drops to dir as a 16 kHz mono 16-bit WAV, named
+// by the time of the drop (dropped-20261118-034512.345.wav), and puts the path
+// in the "asr: dropped" line; "" disables it. It exists so a person can listen to what opened a
 // false segment — the text alone is a hallucination and says nothing about
 // the sound. dir is created on first use. The write runs in the transcription
 // goroutine, off the capture loop; a failure is logged and the pipeline goes on.
@@ -294,7 +312,8 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 					if o.maxCharsPerSec > 0 {
 						ev.Budget = letterBudget(ev.Audio, t, o.charsSlack, o.maxCharsPerSec)
 					}
-					if float64(ev.Letters) > ev.Budget {
+					reason := dropReason(ev, o.phrases)
+					if reason != "" {
 						wav := ""
 						if o.dumpDir != "" {
 							if path, err := dumpClip(o.dumpDir, clip, time.Now()); err != nil {
@@ -303,8 +322,8 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 								wav = " wav=" + path
 							}
 						}
-						log.Printf("asr: dropped %q: at=%.2fs %.2fs, %d letters > budget %.1f, %.1f chars/s%s%s%s",
-							ev.Text, ev.Offset.Seconds(), ev.Audio.Seconds(), ev.Letters, ev.Budget, ev.CharsPerSec,
+						log.Printf("asr: dropped %q: at=%.2fs %.2fs, %s, %.1f chars/s%s%s%s",
+							ev.Text, ev.Offset.Seconds(), ev.Audio.Seconds(), reason, ev.CharsPerSec,
 							ev.VAD, FormatSegments(ev.Segments), wav)
 						return
 					}
@@ -316,6 +335,30 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 	}()
 
 	return out
+}
+
+// dropReason is why ev must not be emitted, for the "asr: dropped" line, or
+// "" to emit it. The budget goes first and, when it fires, is the only reason
+// given — its wording is the line's from before phrases existed:
+//
+//	41 letters > budget 16.5
+//	phrase "*DimaTorzok" 10/25 letters, budget 24.6
+//
+// A phrase reason lists the entries that decided it, as configured, and the
+// letters they cover out of the text's.
+func dropReason(ev Event, f phraseFilter) string {
+	if float64(ev.Letters) > ev.Budget {
+		return fmt.Sprintf("%d letters > budget %.1f", ev.Letters, ev.Budget)
+	}
+	hits, covered := f.match(ev.Text)
+	if hits == nil {
+		return ""
+	}
+	q := make([]string, len(hits))
+	for i, h := range hits {
+		q[i] = strconv.Quote(h)
+	}
+	return fmt.Sprintf("phrase %s %d/%d letters, budget %.1f", strings.Join(q, ","), covered, ev.Letters, ev.Budget)
 }
 
 // dumpClip writes clip as a WAV named by now into dir, creating dir if needed,

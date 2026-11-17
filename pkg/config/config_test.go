@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/vad"
 )
 
@@ -264,4 +265,29 @@ func TestCharsSlackOrDefault(t *testing.T) {
 	var lit ASRConfig
 	assert.Equal(t, float64(12), lit.CharsSlackOrDefault())
 	assert.Equal(t, float64(25), lit.CharsPerSecLimit())
+}
+
+// TestHallucinationPhrasesOrDefault: absent (and a literal ASRConfig) means
+// the default list, an explicit [] turns the filter off, a given list
+// replaces the default.
+func TestHallucinationPhrasesOrDefault(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name string
+		asr  string
+		want []string
+	}{
+		{"absent", `{}`, asr.DefaultHallucinationPhrases()},
+		{"null", `{"hallucination_phrases": null}`, asr.DefaultHallucinationPhrases()},
+		{"empty disables", `{"hallucination_phrases": []}`, []string{}},
+		{"replaces", `{"hallucination_phrases": ["*Foo", "бар баз"]}`, []string{"*Foo", "бар баз"}},
+	} {
+		path := filepath.Join(dir, "config.json")
+		requireWriteString(t, path, `{"asr": `+c.asr+`}`)
+		cfg, err := Load(path)
+		assert.NoError(t, err, c.name)
+		assert.Equal(t, c.want, cfg.ASR.HallucinationPhrasesOrDefault(), c.name)
+	}
+	var lit ASRConfig
+	assert.Equal(t, asr.DefaultHallucinationPhrases(), lit.HallucinationPhrasesOrDefault())
 }
