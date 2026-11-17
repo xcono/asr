@@ -1,45 +1,66 @@
 # asr
 
-Decoupled **speech-to-text "ears"** for the realtime voice agent: Silero VAD +
-transcription, exposed as an importable Go module (`github.com/xcono/asr`)
-consumed in-process by [`xcono/voices`](../voices) over Go channels. A standalone
-debug binary, `cmd/vox`, wraps the same pipeline and logs events to stdout.
+Speech-to-text "ears" for the realtime voice agent: Silero VAD + transcription
+as an importable Go module (`github.com/xcono/asr`), consumed in-process by
+[`xcono/voices`](../voices) over Go channels. `cmd/vox` is a standalone debug
+binary that runs the same pipeline and logs events to stdout.
 
-This module carries **no event transport** — high cohesion, low coupling. If
-cross-service event propagation is ever needed, the central unit (`xcono/voices`)
-owns it (a NATS server in its docker stack); the speech modules stay transport-free.
+The module carries **no event transport**: events flow over Go channels only.
 
-## Facade (importable — the path voices uses)
+## Usage
 
 ```go
+import "github.com/xcono/asr" // package stt
+
 svc, err := stt.New(cfg)               // owns the mic + Silero model
-svc := stt.NewWith(src, det, rec, t)   // or inject components (voices owns the device)
+svc := stt.NewWith(src, det, rec, t)   // or inject components (caller owns them)
 
-for ev := range svc.Events() { ... }   // Stream: SpeechStart / SpeechEnd / SpeechText
-ok := svc.IsSpeaking()                 // VAD TRUE/FALSE (barge-in signal)
-text, err := svc.Transcribe(ctx, pcm)  // Batch one-shot (16 kHz mono PCM)
+for ev := range svc.Events() { ... }   // SpeechStart / SpeechEnd / SpeechText / SpeechError
+ok := svc.IsSpeaking()                 // VAD state (barge-in signal)
+text, err := svc.Transcribe(ctx, pcm)  // one-shot batch (16 kHz mono PCM)
 ```
 
-Nothing here starts a server; events are delivered over Go channels only.
+| Event | Fields |
+|-------|--------|
+| `SpeechStart` | `Timestamp` |
+| `SpeechEnd` | `Timestamp` |
+| `SpeechText` | `Timestamp`, `Text` |
+| `SpeechError` | `Err` |
 
-## Pipeline (the cmd/vox debug path)
+## Pipeline
 
 ```
-Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
-                                    ├─ SpeechEnd   → log
-                                    └─ SpeechText  → log
+Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
 ```
 
-`asr.Listen` runs the full pipeline: audio capture → Silero VAD (FSM + preroll) → segment collection → batch transcription. It returns these as a channel of events; `cmd/vox` logs them to stdout. In-process consumers (e.g. `xcono/voices`) range over the same channel via the facade.
+`asr.Listen` runs capture → Silero VAD (FSM + preroll) → utterance collection →
+batch transcription, and returns a channel of events.
+
+Audio format is fixed: **16 kHz / 16-bit / little-endian / mono**, in
+512-sample (32 ms) windows.
+
+## Build & run
+
+```bash
+make deps     # PortAudio headers (sudo apt install portaudio19-dev)
+make          # run cmd/vox (loads config.json from the working directory)
+make build    # compile to ./bin/vox
+make test     # go test ./...
+make help     # list all targets
+```
+
+PortAudio (mic capture) is the only native dependency. The Silero VAD is pure
+Go ([`zserge/govad`](https://github.com/zserge/govad)) with the v5 weights
+embedded in the binary — no model file, no ONNX Runtime.
 
 ## Config
 
-`config.json` in the working directory:
+`config.json` in the working directory, or `vox -config <path>`. Every field
+has a default, so `{}` is a valid config.
 
 ```json
 {
   "vad": {
-    "model_path": "pkg/vad/silero_vad.onnx",
     "threshold": 0.30,
     "hysteresis": 0.15,
     "barge_in_ms": 64,
@@ -57,139 +78,45 @@ Mic → audio.Capture → asr.Listen → ┬─ SpeechStart → log
 }
 ```
 
-### VAD parameters
+### VAD
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `threshold` | 0.30 | Speech probability above this → "maybe speaking" |
-| `hysteresis` | 0.15 | Release threshold = `threshold - hysteresis` (0.15). Prevents flicker at the boundary |
-| `barge_in_ms` | 64 | Consecutive speech windows needed to confirm onset (2 × 32ms windows). Filters out noise bursts |
-| `release_ms` | 700 | Consecutive silence windows to confirm offset (batch path). Prevents cutting off mid-pause |
-| `end_of_turn_ms` | 800 | Consecutive silence windows to finalize a streaming turn. Slightly longer than release — more conservative for turn commitment |
-| `preroll_ms` | 300 | Audio retained before confirmed onset. Prevents clipping the first syllable |
+| `threshold` | 0.30 | Speech probability at or above this counts as speech |
+| `hysteresis` | 0.15 | Release gate = `threshold - hysteresis`; prevents flicker at the boundary |
+| `barge_in_ms` | 64 | Speech evidence needed to confirm onset (2 windows); filters noise bursts |
+| `release_ms` | 700 | Silence needed to end the utterance; prevents cutting off mid-pause |
+| `end_of_turn_ms` | 800 | Silence needed to finalize a streaming turn (streaming path, not wired in) |
+| `preroll_ms` | 300 | Audio kept from before the confirmed onset, so the first syllable isn't clipped |
+| `debug` | false | Print each window's speech probability to stderr as a meter |
+
+The defaults are tuned for Silero **v5** probabilities; a different model
+generation needs re-tuning.
 
 ### STT providers
 
-- **gigaam** — local batch STT via an OpenAI-compatible HTTP API (`/v1/audio/transcriptions`). Requires a separate Python server running at `base_url`.
-- **whisper** — the same batch client against the whisper.cpp server (`docker.whisper.yaml`). Extra fields `language` (default `ru`; `auto` to detect — with a fixed language whisper.cpp translates other languages instead of transcribing them) and `prompt` (default empty; decoder context that steers spelling of terms). Both are sent only when non-empty. Multi-segment replies are flattened to one line.
-- **elevenlabs** — cloud batch STT via the ElevenLabs Scribe API (`/v1/speech-to-text`, default model `scribe_v2`). Requires `api_key`; `language_code` (e.g. `"ru"`) is an optional hint, empty means server-side auto-detect.
+All providers are batch: each VAD-segmented utterance is sent as one request.
 
-`provider` defaults to `gigaam` in code; the checked-in `config.json` selects `whisper`.
+- **gigaam** (code default) — OpenAI-compatible `/v1/audio/transcriptions` at `base_url`.
+- **whisper** — the same client against the whisper.cpp server. `language`
+  (default `ru`; `auto` to detect — with a fixed language whisper.cpp translates
+  other languages instead of transcribing them) and `prompt` (decoder context
+  that steers spelling of terms) are sent only when non-empty.
+- **elevenlabs** — cloud ElevenLabs Scribe (`/v1/speech-to-text`, default model
+  `scribe_v2`). Needs `api_key`; `language_code` is an optional hint.
 
-## VAD
+## STT servers
 
-Silero VAD model (ONNX, cgo) wrapped in a leaky-counter FSM:
+The STT model runs as a separate server on `:8008`. Three interchangeable
+backends ship as standalone compose files — run exactly one. They need the GPU
+box and the NVIDIA Container Toolkit.
 
-1. **Model** — `vad.Model` loads the ONNX file, `Infer(window)` returns a speech probability per 512-sample (32ms) window.
-2. **FSM** — `vad.FSM` tracks `speechRun` / `silenceRun` counters. When `speechRun` reaches `onsetWindows` → `ToSpeaking`. When `silenceRun` reaches `releaseWindow` → `ToSilence`. Hysteresis prevents rapid toggling.
-3. **Preroll** — `vad.Preroll` is a ring buffer that continuously records. On `ToSpeaking`, `Snapshot()` returns the last `preroll_ms` of audio so the first syllable isn't lost.
-4. **EndOfTurn** — `vad.EndOfTurn` counts consecutive silence windows for the streaming path. Fires when the counter reaches `end_of_turn_ms`.
-
-Audio wire format: **16 kHz / 16-bit / little-endian / mono** (hard constraint from the model).
-
-## STT
-
-Two paths exist in `pkg/asr/`:
-
-- **Batch** — `Transcriber` encodes the full utterance as WAV, POSTs to `{base_url}/audio/transcriptions`. Used by `asr.Listen` after `SpeechEnd`.
-- **Streaming** — `StreamSession` opens a WebSocket, sends PCM frames in real-time, receives partial/final transcripts. For future streaming STT providers.
-
-The `asr.Listen` pipeline ties it together:
-
-```go
-func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad.Timing) <-chan Event
-```
-
-Returns a channel of `Event` (`SpeechStart`, `SpeechEnd`, `SpeechText` with timestamp, text, and voice file ID).
-
-## Events
-
-`asr.Listen` (and the facade's `Events()`) yields a channel of `Event`:
-
-| Kind | Fields |
-|------|--------|
-| `SpeechStart` | `Timestamp` |
-| `SpeechEnd` | `Timestamp` |
-| `SpeechText` | `Timestamp`, `Text`, `VoiceFileID` |
-| `SpeechError` | `Err` |
-
-Consumers range over the channel in-process. There is no network event bus here.
-
-## Infrastructure
-
-All three native dep groups (PortAudio headers, ONNX Runtime, Silero VAD model) are installable with one command:
-
-```bash
-make deps                  # PortAudio + ONNX Runtime + Silero VAD model
-# Or individually:
-make deps-portaudio       # sudo apt install portaudio19-dev (Debian/Ubuntu)
-make deps-ort              # download + extract ONNX Runtime to ~/.local/
-make deps-model            # fetch the Silero VAD v5 ONNX model to pkg/vad/
-```
-
-`ORT_VERSION` (default `1.18.1`) and `SILERO_VERSION` (default `v5.1.2`) are overridable on the make command line.
-
-### ONNX Runtime
-
-The VAD package uses cgo. Set `ORT` to your ONNX Runtime install:
-
-```bash
-export ORT=~/.local/onnxruntime-linux-x64-1.18.1
-# Or: make ORT=/path/to/it  (or  make ORT_VERSION=1.18.1 deps-ort)
-```
-
-The Makefile sets `C_INCLUDE_PATH`, `LIBRARY_PATH`, and `LD_RUN_PATH` from `ORT`. Without these the linker fails (`cannot find -lonnxruntime`).
-
-### Silero VAD model
-
-The ONNX model ships from `snakers4/silero-vad` ([v5.1.2 tag](https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx)); it is gitignored (`*.onnx`) and not committed. `make deps-model` first tries to copy it from the go modcache (the `hylarucoder/silero-vad-onnx-go` fork bundles a byte-identical copy in its `testfiles/`), falling back to a direct download from upstream if the modcache is unavailable.
-
-> ⚠️ The fork's cgo bridge pins the Silero **v5** state layout (`stateLen = 2*1*128`, `contextLen = 64`). The v6 model changed this shape — do not bump `SILERO_VERSION` to a v6 tag without updating the bridge first.
-
-### PortAudio (required for mic capture)
-
-```bash
-make deps-portaudio      # or:  apt install portaudio19-dev
-```
-
-### STT servers (external dependency)
-
-The STT model runs as a separate server exposing an OpenAI-compatible
-`/v1/audio/transcriptions` endpoint on `:8008` — an external process, not embedded Go
-code. Point `asr.<provider>.base_url` in config at it. Three **interchangeable** backends ship
-here as standalone compose files (each a complete `stt:8008` stack on the `voices` network;
-GigaAM and Qwen reuse the external `llms_hf-cache` volume, Whisper downloads its ggml file into
-its own `whisper-models` volume) — pick exactly one:
-
-| backend | compose file | dir | mode | command |
+| Backend | Compose file | Dir | Mode | Command |
 |---|---|---|---|---|
-| **GigaAM v3** (default) | `docker.giga.yaml` | `llm/giga3` | batch, Russian-only | `make up` |
-| **Qwen3-ASR-1.7B** | `docker.qwen.yaml` | `llm/qwen3` | streaming (WS `/v1/asr/stream`) + multilingual/English | `make up-qwen` |
-| **Whisper large-v3-turbo** (whisper.cpp, GPU 1) | `docker.whisper.yaml` | `llm/whisper` | batch, multilingual (default `ru`) | `make up-whisper` / `make down-whisper` |
+| Whisper large-v3-turbo (whisper.cpp) | `docker.whisper.yaml` | `llm/whisper` | batch, multilingual | `make up-whisper` / `make down-whisper` |
+| GigaAM v3 | `docker.giga.yaml` | `llm/giga3` | batch, Russian-only | `make up` / `make down` |
+| Qwen3-ASR-1.7B | `docker.qwen.yaml` | `llm/qwen3` | streaming (WS `/v1/asr/stream`), multilingual | `make up-qwen` / `make down` |
 
-GigaAM has no streaming server (batch-only); Qwen3-ASR is the streaming/multilingual path.
-`xcono/voices` selects the backend by which file it `include:`s — its compose interpolates
-`../asr/docker.${ASR_BACKEND:-giga}.yaml`, so `ASR_BACKEND=qwen` there is the same switch as
-`make up-qwen` here. Build/up needs the GPU box + NVIDIA Container Toolkit — not a sandbox.
-
-### Consuming ASR from another Go process
-
-Import the facade and range over `Events()` — no broker, no subjects:
-
-```go
-import "github.com/xcono/asr" // package stt
-
-svc := stt.NewWith(src, det, rec, timing) // caller owns the mic/model lifecycle
-for ev := range svc.Events() {
-    // ev.Kind: SpeechStart | SpeechEnd | SpeechText | SpeechError
-}
-```
-
-## Build & Run
-
-```bash
-make          # build → ./bin/vox
-make run      # build + run (loads config.json from cwd)
-make test     # run tests
-make env      # print resolved ORT path
-```
+`xcono/voices` picks the backend through its own compose
+(`../asr/docker.${ASR_BACKEND:-giga}.yaml`). The whisper.cpp HTTP contract is
+described in [`llm/whisper/README.md`](llm/whisper/README.md).

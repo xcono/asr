@@ -12,7 +12,7 @@ import (
 )
 
 // Local fakes (the asr package's are unexported). They satisfy asr.Source /
-// asr.Detector / asr.Recognizer so the facade runs with no ONNX or PortAudio.
+// asr.Detector / asr.Recognizer so the facade runs with no model or PortAudio.
 
 type fakeSource struct {
 	frames, i int

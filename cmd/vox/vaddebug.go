@@ -37,7 +37,7 @@ func (d debugDetector) Infer(window []int16) (float32, error) {
 func probBar(prob float32, t vad.Timing) string {
 	const width = 30
 	filled := max(0, min(int(prob*width), width))
-	fwidth := float32(width)                               // float var → runtime (not constant) truncation
+	fwidth := float32(width)                              // float var → runtime (not constant) truncation
 	release := int(fwidth * (t.Threshold - t.Hysteresis)) // release gate
 	onset := int(fwidth * t.Threshold)                    // onset gate
 

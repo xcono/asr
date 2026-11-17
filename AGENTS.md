@@ -1,224 +1,149 @@
 # asr
 
-Decoupled speech-to-text module (`github.com/xcono/asr`) for the realtime voice
-agent: Silero VAD + transcription behind an importable facade
+Speech-to-text module (`github.com/xcono/asr`) for the realtime voice agent:
+Silero VAD + transcription behind an importable facade
 (`stt.New`/`stt.NewWith` → `Events()` / `IsSpeaking()` / `Transcribe()`),
-consumed **in-process** by [`xcono/voices`](../voices) over Go channels. A
-standalone debug binary, `cmd/vox`, wraps the same pipeline and logs events to
-stdout. **This module carries no event transport** (high cohesion, low coupling):
-if cross-service propagation is ever needed, the central unit `xcono/voices` owns
-it (a NATS server in its docker stack), not the speech modules.
+consumed **in-process** by [`xcono/voices`](../voices) over Go channels.
+`cmd/vox` is a standalone debug binary that runs the same pipeline and logs
+events to stdout.
 
-**Source PoC:** `xcono/voices` — the full voice assistant (VAD → ASR → LLM →
-TTS). This module extracts the VAD + ASR layer; sibling [`xcono/tts`](../tts) is
-the "mouth". Do not copy TTS, LLM, voiceq, act, or audio-playback code here.
+**No event transport lives here.** Events flow over Go channels only; if
+cross-service propagation is ever needed, `xcono/voices` owns it.
 
-Out of scope: LLM, TTS, playback, orchestrator turn loop, Bluetooth headset.
+Out of scope: LLM, TTS (sibling [`xcono/tts`](../tts)), playback, the
+orchestrator turn loop.
 
 ## Build & run
 
 ```bash
-make deps     # one-shot: PortAudio headers + ONNX Runtime + Silero VAD model
-make          # default goal: run  (build + run, loads config.json from cwd)
+make deps     # PortAudio headers (apt install portaudio19-dev, needs sudo)
+make          # default goal: run cmd/vox (loads config.json from cwd)
 make build    # compile to ./bin/vox
-make test     # go test ./...  (guarded — see ONNX Runtime below)
-make env      # print resolved ORT path + model path
+make test     # go test ./...
 make help     # list documented targets
 make up-whisper / down-whisper   # Whisper STT server (docker.whisper.yaml)
 ```
 
-`make deps` is idempotent and splits into `deps-portaudio` (`apt install
-portaudio19-dev`, needs sudo), `deps-ort` (downloads ONNX Runtime
-`ORT_VERSION` — default `1.18.1` — to `~/.local/onnxruntime-linux-x64-<ver>`
-and extracts it), and `deps-model` (fetches the Silero VAD v5 ONNX model to
-`pkg/vad/silero_vad.onnx`). `deps-model` prefers copying from the go modcache
-(the `hylarucoder/silero-vad-onnx-go` fork bundles a byte-identical copy in
-its `testfiles/`), falling back to a `wget` from `snakers4/silero-vad`
-`SILERO_VERSION` (default `v5.1.2`). Override `ORT_VERSION`, `SILERO_VERSION`,
-`ORT`, `MODEL_PATH` on the make command line to retarget.
+`vox` takes one flag: `-config <path>` (default `config.json`). VAD diagnostics
+are a config field, not a flag: `"vad": {"debug": true}` tees each window's
+speech probability to stderr as a meter.
 
-The binary takes one flag: `-config <path>` (default `config.json`). VAD
-diagnostics are a config field, not a flag: `"vad": {"debug": true}` tees each
-window's Silero speech probability to stderr as a meter, to diagnose missed
-onsets; its gate ticks track the configured VAD timing. Config is read from the working directory by default —
-run from the repo root so `pkg/vad/silero_vad.onnx` (the default `model_path`)
-resolves.
+### Native dependencies
 
-### ONNX Runtime (required to build/run)
-
-`pkg/vad` is cgo. The Makefile exports `C_INCLUDE_PATH`, `LIBRARY_PATH`, and
-`LD_RUN_PATH` from `ORT` (default
-`~/.local/onnxruntime-linux-x64-1.18.1`). Without these the linker fails with
-`ld: cannot find -lonnxruntime`. The `check-ort` guard fires a clear error
-before the build if `$(ORT)/lib/libonnxruntime.so` is missing. Override with
-`make ORT=/path/to/your/onnxruntime`.
-
-Because `vad` is cgo, `make test` (which runs `go test ./...`) also requires a
-working ORT. To run non-cgo package tests in isolation without ORT, target the
-specific packages: e.g. `go test ./pkg/asr/... ./pkg/audio/...`. (Note: `config`
-imports `vad` for `Timing`, so it is also cgo-linked.)
-
-### PortAudio (required for mic capture)
-
-`apt install portaudio19-dev`. The `audio.Capture` stream wires PortAudio;
-tests in `pkg/audio` use it (only `TestIsOverflow` exercises the real
-PortAudio error type).
-
-### Silero model file (not in repo)
-
-`silero_vad.onnx` is gitignored (`*.onnx`). The default `config.json` points at
-`pkg/vad/silero_vad.onnx`. Run `make deps-model` to fetch it (copies from the go
-modcache — the fork's `testfiles/silero_vad.onnx` — or downloads from
-`snakers4/silero-vad` `v5.1.2`). `vad.NewModel` fails without it.
-
-> ⚠️ The fork's cgo bridge pins the Silero **v5** state layout (`stateLen =
-> 2*1*128`, `contextLen = 64`). The v6 model changed this shape — do not bump
-> `SILERO_VERSION` to a v6 tag without updating the bridge first.
+- **PortAudio** is the only one (`pkg/audio`). Everything importing it is cgo:
+  `pkg/asr`, the `stt` facade, `cmd/vox`.
+- **Silero VAD is pure Go.** `pkg/vad.Model` wraps
+  [`zserge/govad`](https://github.com/zserge/govad) with the **v5** weights
+  embedded in the binary — no model file, no ONNX Runtime. `pkg/vad` and
+  `pkg/config` build and test with `CGO_ENABLED=0`.
 
 ## Config
 
-`config.json` (or the path passed via `-config`). Schema lives in
-`pkg/config/config.go`; `Load` calls `setDefaults`, so every zero value has a
-sensible fallback and a minimal `{}` file still runs. The two sections are
-`vad` and `asr` (the speech-to-text section was `stt` before the rename — a
-file still using `"stt"` is silently ignored and falls back to defaults).
-Provider is `"gigaam"` by default in code; the checked-in `config.json` selects
-`"whisper"` (section `asr.whisper`: `base_url` default
-`http://localhost:8008/v1`, `model` (ignored by whisper.cpp), `language` default
-`ru`, `prompt` default empty). `gigaam` and `whisper` use the same
-`asr.Transcriber`; `language`/`prompt` are sent only when non-empty.
-`"elevenlabs"` is the cloud Scribe provider (`pkg/asr/elevenlabs.go`). All three
-are built by `stt.NewRecognizer`. See `README.md` for the full table of VAD
-parameters and their meaning.
+`config.json` (or `-config`). Schema is in `pkg/config/config.go`; `Load` calls
+`setDefaults`, so a minimal `{}` file runs. Sections: `vad` and `asr`. Unknown
+keys are ignored silently — a misspelt section falls back to defaults.
 
-## Architecture / data flow
+Provider defaults to `"gigaam"` in code; the checked-in `config.json` selects
+`"whisper"`. `gigaam` and `whisper` share `asr.Transcriber` (`language`/`prompt`
+are sent only when non-empty); `"elevenlabs"` is `pkg/asr/elevenlabs.go`. All
+three are built by `stt.NewRecognizer` — the one provider switch, shared with
+`xcono/voices`. `README.md` has the parameter tables.
+
+## Architecture
 
 ```
-Mic → audio.Capture → asr.Listen ┬─ SpeechStart → log / channel
-                                  ├─ SpeechEnd   → log / channel
-                                  └─ SpeechText   → log / channel
+Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
 ```
 
-- `cmd/vox/main.go` is the only entry point: load config → load Silero → init
-  PortAudio → build an `asr.Recognizer` via `stt.NewRecognizer` (the one
-  provider switch, shared with the facade and with `xcono/voices`) →
-  range over `asr.Listen`'s event channel → log each event. No transport.
-  `cmd/vox/vaddebug.go` is a helper in the same package: under `vad.debug` it
-  wraps the `Detector` to tee per-window speech probabilities as a meter
-  (behaviour-neutral — it returns the inner result unchanged).
-- `asr.Listen` (`pkg/asr/listen.go`) is the pipeline controller and the place
-  the four domains meet. It owns the FSM, preroll ring, and utterance buffer,
-  and dispatches transcription to a goroutine so a slow recogniser never
-  stalls capture. The channel closes when the source errors (EOF/stream error)
-  or the context is cancelled.
-- `pkg/vad` — Silero model wrapper (`Model`, cgo), hysteresis FSM (`FSM`),
-  preroll ring (`Preroll`), end-of-turn countdown (`EndOfTurn`, used by the
-  streaming path), and `Timing`/consts. **`Model.Infer` is stateful** (Silero's
-  recurrent state) — never call `Reset` between windows of one stream.
-- `pkg/asr` — `Source`/`Detector`/`Recognizer` interfaces (so tests inject
-  scripted implementations and avoid the ONNX model / network), `Transcriber`
-  (batch, OpenAI-compatible multipart WAV upload), `StreamSession` (WebSocket
-  streaming; **not wired into the pipeline**, exists for future streaming STT).
-- `pkg/audio` — PortAudio `Capture` + PCM16LE / WAV codec + the
-  Linux-only `SilenceStderr` trick (see Gotchas).
-- `pkg/config` — config schema + `Load`. `VADConfig.ToTiming()` lives here
-  (not as a `vad` constructor) deliberately, so all config-schema concerns stay
-  in one package. `config` therefore imports `vad` (for `Timing`) — no cycle,
-  since `vad` imports nothing from this project — which makes `config`
-  cgo-linked too.
+- `stt.go` — the facade. `New` owns the mic, model and PortAudio lifecycle;
+  `NewWith` takes caller-owned components.
+- `cmd/vox/main.go` — load config → build model, capture and recogniser → range
+  over `asr.Listen` → log. `vaddebug.go` wraps the `Detector` to print the
+  probability meter without changing results.
+- `pkg/asr` — `Listen` (`listen.go`) is the pipeline controller: it owns the
+  FSM, preroll ring and utterance buffer, and transcribes in a goroutine so a
+  slow recogniser never stalls capture. The channel closes when the source
+  errors or the context is cancelled. Also here: the consumer-side interfaces
+  `Source`/`Detector`/`Recognizer`, `Transcriber` (batch, OpenAI-compatible
+  multipart WAV upload), `ElevenLabs`, and `StreamSession` (WebSocket streaming).
+- `pkg/vad` — `Model`, hysteresis `FSM`, `Preroll` ring, `EndOfTurn` countdown,
+  `Timing` and the tuned consts.
+- `pkg/audio` — PortAudio `Capture`, PCM16LE / WAV codec, `ResampleLinear`,
+  `SilenceStderr`.
+- `pkg/config` — schema + `Load`. `VADConfig.ToTiming()` lives here so all
+  config-schema concerns stay in one package; `config` imports `vad`, never the
+  reverse.
+- `llm/` + `docker.*.yaml` — the external STT servers (whisper.cpp, GigaAM,
+  Qwen3-ASR). Whisper's HTTP contract is in `llm/whisper/README.md`.
 
-## Audio wire format (hard constraint)
+## Audio format (hard constraint)
 
-STT/VAD input is **16 kHz / 16-bit / little-endian / mono**. `vad.SampleRate`
-(16000) and `vad.Window` (512 samples = 32 ms) are Silero's native contract —
-not tunable. Audio coming in at any other rate/width must be converted before
-it reaches the pipeline. `audio.ResampleLinear` and `audio.PCM16LE` /
-`audio.DecodePCM16LE` exist for this; resample output is float32 [-1,1] (for
-VAD-style consumers), not int16.
+Input is **16 kHz / 16-bit / little-endian / mono**. `vad.SampleRate` (16000)
+and `vad.Window` (512 samples = 32 ms) are Silero's native contract, not
+tunables. Convert anything else before it reaches the pipeline
+(`audio.ResampleLinear`, `audio.PCM16LE` / `audio.DecodePCM16LE`); resample
+output is float32 [-1,1], not int16.
 
 ## Conventions
 
-- Short package names (3–5 letters), one concern per directory: `vad`, `asr`,
-  `audio`, `config`. (The original PoC carried an event-transport package; it was
-  dropped — this module is transport-free, events flow over Go channels only.)
-- One noun per file: `listen.go`, `stream.go`, `batch.go`, `capture.go`. Where
-  files form a pipeline, name them so **alphabetical order = process order**.
-- Error wrapping: `fmt.Errorf("context: %w", err)`. Return early, no deep
-  nesting. Package-prefix messages at call sites (e.g. `"vad model: %w"`,
-  `"asr: status %d: %s"`).
-- Doc comments on exported identifiers explain *why*, not *what*. Several
-  comments document prior bugs they prevent regressing (FSM leaky counters,
-  preroll sizing, overflow tolerance) — preserve that context when editing.
-- Interfaces are defined at the consumer side (`asr.Source`, `asr.Detector`,
-  `asr.Recognizer`), not the implementation side, so tests can inject fakes.
+- Short package names, one concern per directory: `vad`, `asr`, `audio`,
+  `config`.
+- One noun per file (`listen.go`, `stream.go`, `batch.go`, `capture.go`).
+- Errors: `fmt.Errorf("context: %w", err)`, return early, package-prefixed
+  messages (`"vad model: %w"`, `"asr: status %d: %s"`).
+- Doc comments explain *why*. Several record a bug they prevent (FSM leaky
+  counters, preroll sizing, overflow tolerance) — keep that context when editing.
+- Interfaces are defined at the consumer (`asr.Source`, `asr.Detector`,
+  `asr.Recognizer`) so tests can inject fakes.
 
-## Testing patterns
+## Testing
 
-- Tests live next to the code (`*_test.go` in the same package, white-box).
-- `pkg/asr/batch` and `pkg/config` use `testify` (`require`/`assert`).
-  `pkg/vad`, `pkg/asr/listen`, `pkg/audio` use plain `t.Fatalf`/`t.Errorf`.
-  Match the convention of the package you're editing.
-- VAD/ASR tests avoid the ONNX model and the network via fakes:
-  - `fakeDetector` (`pkg/asr/listen_test.go`) returns scripted per-window
-    probabilities so FSM transitions are deterministic.
-  - `fakeSource` yields N dummy windows then `io.EOF`.
-  - Batch tests use `httptest.NewServer` to fake the OpenAI-compatible STT
-    endpoint; streaming tests upgrade it to a `websocket.Upgrader`.
-- When adding VAD timing-dependent tests, drive counts from the
-  `Timing.OnsetWindows()`/`ReleaseWindows()`/`EndOfTurnWindows()` helpers so
-  they stay correct if consts change.
+- Tests sit next to the code, same package (white-box).
+- `pkg/asr/batch` and `pkg/config` use `testify`; `pkg/vad`, `pkg/asr/listen`
+  and `pkg/audio` use plain `t.Fatalf`/`t.Errorf`. Match the package.
+- Pipeline tests avoid the real model and the network: `fakeDetector` returns
+  scripted probabilities, `fakeSource` yields N windows then `io.EOF`, batch
+  tests use `httptest.NewServer`, streaming tests a `websocket.Upgrader`.
+- Drive timing-dependent tests from `Timing.OnsetWindows()` /
+  `ReleaseWindows()` / `EndOfTurnWindows()` so they survive const changes.
 
 ## Gotchas
 
-- **`audio.Capture.Read()` aliases its internal buffer.** The returned
-  `[]int16` is overwritten on the next `Read`. Copy (append / `Preroll.Snapshot`
-  / `Pre/append(utter, frame...)`) before the next call if you need to retain
-  it. The listen loop already does this correctly.
-- **PortAudio writes to raw fd 2, bypassing `os.Stderr`.** During init the
-  ALSA/JACK backends spew device-probe warnings straight to the C-level
-  stderr. `audio.SilenceStderr()` (in `altstderr_linux.go`, build-tagged
-  Linux-only) dups fd 2 to `/dev/null` for that window and restores it after
-  the stream is open. Don't try to silence PortAudio via `os.Stderr` redirects
-  — they won't catch it.
-- **Input overflow is tolerated, not fatal.** `Capture.Read` catches
-  `portaudio.InputOverflowed`, counts it, and still returns the (valid)
-  buffer. Every other error stays fatal so a real device failure isn't
-  swallowed. `Capture.Overflows()` reports the count; `main` logs it at
-  shutdown. Don't "fix" this by propagating overflow.
-- **`asr.Listen` never sets `Event.VoiceFileID`.** The field exists on `Event`
-  but the current pipeline leaves it empty. Wire it only if a recording/
-  audio-file-id source is added.
-- **`silero-vad-go` is a fork via `go.mod replace`.** The import path is
-  `github.com/streamer45/silero-vad-go`, but `replace` redirects it to
-  `github.com/hylarucoder/silero-vad-onnx-go`. Don't "tidy" the replace away.
-- **ElevenLabs STT is batch-only, like GigaAM and Whisper.** `asr.ElevenLabs`
-  (`pkg/asr/elevenlabs.go`) posts each VAD-segmented clip to the cloud Scribe
-  API (`/v1/speech-to-text`, `scribe_v2`, `xi-api-key` header). It needs
-  `elevenlabs.api_key` in config — `stt.NewRecognizer` does not validate it, so
-  a missing key fails at request time (401), not startup.
-- **Streaming STT is unused.** `asr.StreamSession` / `DialStream` /
-  `WSURLFromHTTP` are implemented and tested but not called by the pipeline.
-  `vad.EndOfTurn` (the streaming turn-end signal) is also unused outside its
-  tests. The live path is batch only.
-- **`vad.Timing` zero value is invalid.** Use `vad.DefaultTiming()` and
-  override fields, or build it from `config.VADConfig.ToTiming()` as `main`
-  does. The consts in `pkg/vad/consts.go` are the measured defaults — the
-  comments explain the tuning tradeoffs; re-read them before changing.
+- **`Model.Infer` is stateful** (Silero's recurrent state). One `Model` per
+  stream; it is not safe for concurrent use.
+- **The timing consts are tuned for Silero v5.** A v6 model scores the same
+  audio differently — switching generations means re-tuning
+  `pkg/vad/consts.go`, not a drop-in swap. Read the comments there before
+  changing anything.
+- **`vad.Timing` zero value is invalid.** Use `vad.DefaultTiming()` or
+  `config.VADConfig.ToTiming()`.
+- **`govad` is a small single-author module pinned by pseudo-version**, with no
+  releases. If it disappears, vendor it rather than reintroducing cgo.
+- **`audio.Capture.Read()` aliases its internal buffer.** The slice is
+  overwritten on the next `Read` — copy before retaining it. `Listen` already
+  does.
+- **PortAudio writes to raw fd 2**, bypassing `os.Stderr`. `audio.SilenceStderr()`
+  (Linux-only) dups fd 2 to `/dev/null` while the stream opens. Redirecting
+  `os.Stderr` won't catch it.
+- **Input overflow is tolerated, not fatal.** `Capture.Read` counts
+  `portaudio.InputOverflowed` and still returns the valid buffer; every other
+  error stays fatal. Don't propagate overflow.
+- **`stt.New` is one-per-process**: it calls the process-global
+  `portaudio.Initialize` / `Terminate`.
+- **All providers are batch.** `asr.StreamSession` / `DialStream` and
+  `vad.EndOfTurn` are implemented and tested but not wired into `Listen`.
+- **`Event.VoiceFileID` is never set** by the pipeline.
+- **ElevenLabs needs `elevenlabs.api_key`**, and `stt.NewRecognizer` does not
+  validate it — a missing key fails at request time (401), not at startup.
 
-## Python constraint
+## Python
 
-Goal is to avoid Python in the codebase. GigaAM currently requires an external
-Python server exposing an OpenAI-compatible `/v1/audio/transcriptions`
-endpoint — that process is an external dependency, not embedded Go code, and is
-pointed at via `asr.gigaam.base_url`. Whisper runs in a locally built whisper.cpp
-(C++) image (`llm/whisper/Dockerfile`, compiled for sm_120 — the upstream image
-has no RTX 50xx code), same endpoint, via `asr.whisper.base_url`; its measured
-HTTP contract is in `llm/whisper/README.md`. If a Go-native ASR alternative becomes
-viable, replace the `Transcriber`.
+Keep Python out of the Go codebase. The STT servers under `llm/` are external
+processes reached over HTTP: GigaAM and Qwen3-ASR are Python, Whisper is a
+locally built whisper.cpp image (`llm/whisper/Dockerfile`, compiled for sm_120
+because the upstream image has no RTX 50xx code).
 
 ## Development
 
-Built iteratively by AI coding agents. Prefer small, reviewed increments over
-large rewrites. `README.md` holds the more detailed, user-facing reference;
-this file is the agent-facing compass — keep both consistent when you change
-behavior.
+Prefer small, reviewed increments. `README.md` is the user-facing reference,
+this file the agent-facing one — keep both consistent when behaviour changes.

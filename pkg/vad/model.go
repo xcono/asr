@@ -3,30 +3,28 @@ package vad
 import (
 	"fmt"
 
-	// The fork keeps the upstream module path; go.mod has a `replace` pointing it
-	// at hylarucoder/silero-vad-onnx-go.
-	"github.com/streamer45/silero-vad-go/speech"
+	"github.com/zserge/govad"
 )
 
 // Model wraps the Silero detector: it normalises an int16 window to float32
 // [-1,1] and returns the per-window speech probability. The detector is
 // stateful across calls (recurrent state) — never Reset between windows of a
 // continuous stream.
+//
+// Inference is pure Go (zserge/govad, Silero v5 weights embedded in the
+// binary): no cgo, no model file. The timing consts in this package are tuned
+// for v5 probabilities — a different Silero generation (v6) scores the same
+// audio differently and means re-tuning them.
 type Model struct {
-	sd  *speech.Detector
+	sd  *govad.VAD
 	buf []float32
 }
 
-// NewModel loads the Silero v5 ONNX model at modelPath. Needs ONNX Runtime at
-// build/run time (see the Makefile ORT env).
-func NewModel(modelPath string) (*Model, error) {
-	sd, err := speech.NewDetector(speech.DetectorConfig{
-		ModelPath:  modelPath,
-		SampleRate: SampleRate,
-		Threshold:  Threshold, // config validation requires (0,1)
-	})
+// NewModel builds a detector from the embedded Silero v5 weights.
+func NewModel() (*Model, error) {
+	sd, err := govad.New()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vad: load embedded weights: %w", err)
 	}
 	return &Model{sd: sd, buf: make([]float32, Window)}, nil
 }
@@ -42,8 +40,9 @@ func (m *Model) Infer(window []int16) (float32, error) {
 	for i, s := range window {
 		m.buf[i] = float32(s) / 32768
 	}
-	return m.sd.Infer(m.buf)
+	return m.sd.Process(m.buf), nil
 }
 
-// Close releases the ONNX session.
-func (m *Model) Close() error { return m.sd.Destroy() }
+// Close is a no-op: the pure-Go detector holds no native resources. It stays so
+// owners can keep a uniform teardown list.
+func (m *Model) Close() error { return nil }

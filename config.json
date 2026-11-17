@@ -1,6 +1,5 @@
 {
   "vad": {
-    "model_path": "pkg/vad/silero_vad.onnx",
     "threshold": 0.30,
     "hysteresis": 0.15,
     "barge_in_ms": 64,

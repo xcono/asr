@@ -24,7 +24,6 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.NotNil(t, cfg)
 
 	// VAD defaults
-	assert.Equal(t, "pkg/vad/silero_vad.onnx", cfg.VAD.ModelPath)
 	assert.Equal(t, float32(0.30), cfg.VAD.Threshold)
 	assert.Equal(t, float32(0.15), cfg.VAD.Hysteresis)
 	assert.Equal(t, 64, cfg.VAD.BargeInMs)
@@ -50,7 +49,6 @@ func TestLoad_FullConfig(t *testing.T) {
 
 	input := Config{
 		VAD: VADConfig{
-			ModelPath:   "/models/silero_vad.onnx",
 			Threshold:   0.50,
 			Hysteresis:  0.20,
 			BargeInMs:   128,
@@ -78,7 +76,6 @@ func TestLoad_FullConfig(t *testing.T) {
 	assert.NotNil(t, cfg)
 
 	// VAD
-	assert.Equal(t, "/models/silero_vad.onnx", cfg.VAD.ModelPath)
 	assert.Equal(t, float32(0.50), cfg.VAD.Threshold)
 	assert.Equal(t, float32(0.20), cfg.VAD.Hysteresis)
 	assert.Equal(t, 128, cfg.VAD.BargeInMs)

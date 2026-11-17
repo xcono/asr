@@ -25,7 +25,7 @@ func (s *fakeSource) Read() ([]int16, error) {
 }
 
 // fakeDetector returns scripted probabilities, one per frame, so VAD transitions
-// are deterministic without the ONNX model.
+// are deterministic without the real model.
 type fakeDetector struct {
 	probs []float32
 	i     int

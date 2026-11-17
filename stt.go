@@ -60,7 +60,7 @@ type Service struct {
 	closers []func() error // resources New owns (mic, model, portaudio); nil for NewWith
 }
 
-// New builds the default pipeline from config: the Silero model (cgo/ONNX), the
+// New builds the default pipeline from config: the Silero model (pure Go), the
 // PortAudio mic, and the configured STT provider — the same wiring as cmd/vox
 // minus NATS. It owns those resources and frees them on Close.
 //
@@ -73,7 +73,7 @@ func New(cfg *config.Config) (*Service, error) {
 		return nil, err
 	}
 
-	model, err := vad.NewModel(cfg.VAD.ModelPath)
+	model, err := vad.NewModel()
 	if err != nil {
 		return nil, fmt.Errorf("stt: vad model: %w", err)
 	}
@@ -110,7 +110,7 @@ func New(cfg *config.Config) (*Service, error) {
 
 // NewWith starts a pipeline over caller-supplied components and owns none of
 // them — the caller closes src/det. Use it in tests (scripted Source/Detector,
-// no ONNX or PortAudio) or when ../voices already owns the audio device and
+// no PortAudio) or when ../voices already owns the audio device and
 // feeds STT from a shared source. Timing comes from config.VADConfig.ToTiming
 // or vad.DefaultTiming.
 func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing) *Service {

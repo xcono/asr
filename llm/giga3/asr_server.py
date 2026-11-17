@@ -6,7 +6,7 @@ loopback` target work unchanged — only the acoustic model differs.
 
 WHY GIGAAM
   GigaAM v3 (SberDevices, MIT, Conformer ~240M) is the open SOTA for Russian ASR and owns
-  the telephony/call-center domains (see docs/research/gigaam-russian-asr.md). It is ~8x
+  the telephony/call-center domains. It is ~8x
   smaller than Qwen3-ASR-1.7B, runs at RTF ~0.01-0.03 warm on one RTX 5060 Ti (~0.5 GB
   VRAM, fp16), and needs NO HF token — weights stream from the Sber CDN.
   TRADE-OFF: GigaAM is Russian-ONLY. English code-switching degrades (Pool→"Pull",

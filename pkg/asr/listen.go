@@ -18,7 +18,7 @@ type Source interface {
 }
 
 // Detector returns the per-window speech probability. *vad.Model is the Silero
-// implementation; tests inject scripted probabilities to avoid the ONNX model.
+// implementation; tests inject scripted probabilities to stay deterministic.
 type Detector interface {
 	Infer(window []int16) (float32, error)
 }

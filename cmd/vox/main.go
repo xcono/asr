@@ -41,7 +41,7 @@ func main() {
 
 func run(cfg *config.Config) error {
 	// --- VAD model ---
-	model, err := vad.NewModel(cfg.VAD.ModelPath)
+	model, err := vad.NewModel()
 	if err != nil {
 		return fmt.Errorf("vad model: %w", err)
 	}

@@ -19,7 +19,6 @@ type Config struct {
 
 // VADConfig holds Silero VAD timing parameters.
 type VADConfig struct {
-	ModelPath   string  `json:"model_path"`     // Path to silero_vad.onnx
 	Threshold   float32 `json:"threshold"`      // Onset probability gate (default 0.30)
 	Hysteresis  float32 `json:"hysteresis"`     // Release gate = Threshold - Hysteresis (default 0.15)
 	BargeInMs   int     `json:"barge_in_ms"`    // Above-threshold evidence for onset (default 64)
@@ -81,9 +80,6 @@ func Load(path string) (*Config, error) {
 
 // setDefaults fills in zero values with sensible defaults.
 func (c *Config) setDefaults() {
-	if c.VAD.ModelPath == "" {
-		c.VAD.ModelPath = "pkg/vad/silero_vad.onnx"
-	}
 	if c.VAD.Threshold == 0 {
 		c.VAD.Threshold = 0.30
 	}
