@@ -16,7 +16,6 @@ orchestrator turn loop.
 ## Build & run
 
 ```bash
-make deps     # PortAudio headers (apt install portaudio19-dev, needs sudo)
 make          # default goal: run cmd/vox (loads config.json from cwd)
 make build    # compile to ./bin/vox
 make test     # go test ./...
@@ -30,12 +29,15 @@ speech probability to stderr as a meter.
 
 ### Native dependencies
 
-- **PortAudio** is the only one (`pkg/audio`). Everything importing it is cgo:
-  `pkg/asr`, the `stt` facade, `cmd/vox`.
+- **None.** The module builds with `CGO_ENABLED=0`.
+- **Mic capture is pure Go.** `pkg/audio.Capture` speaks the PulseAudio
+  protocol over its socket via
+  [`jfreymuth/pulse`](https://github.com/jfreymuth/pulse) — no libpulse, no
+  PortAudio. Runtime needs a PulseAudio server or PipeWire with its pulse layer
+  (`pipewire-pulse`); set `PULSE_SERVER` if it isn't auto-discovered.
 - **Silero VAD is pure Go.** `pkg/vad.Model` wraps
   [`zserge/govad`](https://github.com/zserge/govad) with the **v5** weights
-  embedded in the binary — no model file, no ONNX Runtime. `pkg/vad` and
-  `pkg/config` build and test with `CGO_ENABLED=0`.
+  embedded in the binary — no model file, no ONNX Runtime.
 
 ## Config
 
@@ -55,7 +57,7 @@ three are built by `stt.NewRecognizer` — the one provider switch, shared with
 Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
 ```
 
-- `stt.go` — the facade. `New` owns the mic, model and PortAudio lifecycle;
+- `stt.go` — the facade. `New` owns the mic and the model;
   `NewWith` takes caller-owned components.
 - `cmd/vox/main.go` — load config → build model, capture and recogniser → range
   over `asr.Listen` → log. `vaddebug.go` wraps the `Detector` to print the
@@ -68,8 +70,7 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
   multipart WAV upload), `ElevenLabs`, and `StreamSession` (WebSocket streaming).
 - `pkg/vad` — `Model`, hysteresis `FSM`, `Preroll` ring, `EndOfTurn` countdown,
   `Timing` and the tuned consts.
-- `pkg/audio` — PortAudio `Capture`, PCM16LE / WAV codec, `ResampleLinear`,
-  `SilenceStderr`.
+- `pkg/audio` — PulseAudio `Capture`, PCM16LE / WAV codec, `ResampleLinear`.
 - `pkg/config` — schema + `Load`. `VADConfig.ToTiming()` lives here so all
   config-schema concerns stay in one package; `config` imports `vad`, never the
   reverse.
@@ -122,14 +123,25 @@ output is float32 [-1,1], not int16.
 - **`audio.Capture.Read()` aliases its internal buffer.** The slice is
   overwritten on the next `Read` — copy before retaining it. `Listen` already
   does.
-- **PortAudio writes to raw fd 2**, bypassing `os.Stderr`. `audio.SilenceStderr()`
-  (Linux-only) dups fd 2 to `/dev/null` while the stream opens. Redirecting
-  `os.Stderr` won't catch it.
-- **Input overflow is tolerated, not fatal.** `Capture.Read` counts
-  `portaudio.InputOverflowed` and still returns the valid buffer; every other
-  error stays fatal. Don't propagate overflow.
-- **`stt.New` is one-per-process**: it calls the process-global
-  `portaudio.Initialize` / `Terminate`.
+- **The mic is push, `Read` is pull.** The pulse library calls our writer from
+  the goroutine that reads the server connection — the same one that delivers
+  every request's reply. The callback copies the packet (the library reuses the
+  buffer) into a queue and never blocks; `Read` assembles `frameSize` windows
+  from that queue.
+- **Overflow is counted, not fatal.** When the queue is full the packet is
+  dropped and `Capture.Overflows()` counts it; the stream keeps running. Don't
+  propagate it. The server itself has no overflow signal for recording.
+- **A removed mic is not reported.** The library drops the server's
+  stream-killed / suspended / moved messages; only a lost connection surfaces.
+  `Read` therefore errors after 2 s without a packet (`readTimeout`) — the
+  server streams silence as samples, so a gap that long means the source is
+  gone. `Read` returns `io.EOF` after `Close`.
+- **A Bluetooth mic starts with about a second of exact zeros** (seen with
+  EarFun earbuds; a USB Jabra starts with real signal). Frames arrive on time,
+  they are just digital silence while the headset switches profile. No
+  special handling — the VAD sees silence.
+- **`jfreymuth/pulse` is pinned at v0.1.1**, the version `xcono/tts` (via oto)
+  already uses, so `xcono/voices` gets one version for both.
 - **All providers are batch.** `asr.StreamSession` / `DialStream` and
   `vad.EndOfTurn` are implemented and tested but not wired into `Listen`.
 - **`Event.VoiceFileID` is never set** by the pipeline.

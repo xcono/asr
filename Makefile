@@ -54,24 +54,6 @@ down:
 down-whisper:
 	docker compose -f docker.whisper.yaml down
 
-# ====== deps ===============================================================
-# The only native dependency is PortAudio (mic capture). The Silero VAD runs in
-# pure Go with its weights embedded in the binary — no ONNX Runtime, no model
-# file.
-
-## deps: install build/runtime deps (PortAudio headers)
-.PHONY: deps
-deps: deps-portaudio
-
-## deps-portaudio: install PortAudio dev headers (Debian/Ubuntu; needs sudo)
-.PHONY: deps-portaudio
-deps-portaudio:
-	@command -v apt-get >/dev/null 2>&1 || { \
-	  echo "ERROR: apt-get not found — install portaudio19-dev via your distro's package manager"; \
-	  exit 1; }
-	sudo apt-get update
-	sudo apt-get install -y portaudio19-dev
-
 ## help: list documented targets
 .PHONY: help
 help:

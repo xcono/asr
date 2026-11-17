@@ -1,5 +1,5 @@
-// Package audio is the low-level audio layer: PortAudio capture, the PCM/WAV
-// wire-format codec, and the ALSA-probe-spew silencer. It knows nothing about
+// Package audio is the low-level audio layer: mic capture (PulseAudio, pure
+// Go) and the PCM/WAV wire-format codec. It knows nothing about
 // VAD, ASR, or the agent loop — callers feed it samples and rates.
 package audio
 

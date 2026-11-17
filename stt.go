@@ -8,7 +8,7 @@
 // Contract note: this package returns the concrete *Service. Consumers should
 // declare their own narrow interface for the subset they need (Go's
 // consumer-side-interface idiom — see pkg/asr.Source/Detector/Recognizer), so
-// they can mock STT in their own tests without importing the cgo-heavy pkg/vad.
+// they can mock STT in their own tests without importing pkg/vad and the mic.
 // Event types are re-exported as aliases below so a consumer can depend on this
 // one package as the whole STT contract.
 package stt
@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-
-	"github.com/gordonklaus/portaudio"
 
 	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/audio"
@@ -57,16 +55,14 @@ type Service struct {
 	cancel  context.CancelFunc
 	done    chan struct{} // closed when the forwarder goroutine exits
 	closeMu sync.Once
-	closers []func() error // resources New owns (mic, model, portaudio); nil for NewWith
+	closers []func() error // resources New owns (mic, model); nil for NewWith
 }
 
 // New builds the default pipeline from config: the Silero model (pure Go), the
-// PortAudio mic, and the configured STT provider — the same wiring as cmd/vox
-// minus NATS. It owns those resources and frees them on Close.
-//
-// Caveat: New calls portaudio.Initialize and Close calls portaudio.Terminate,
-// which are process-global. Run at most one New-built Service per process. A
-// consumer that already owns the audio device should use NewWith instead.
+// mic (a PulseAudio record stream, pure Go), and the configured STT provider —
+// the same wiring as cmd/vox. It owns those resources and frees them on Close.
+// The mic has its own server connection, so nothing here is process-global; a
+// consumer that already owns the audio device should still use NewWith.
 func New(cfg *config.Config) (*Service, error) {
 	rec, err := NewRecognizer(cfg.ASR)
 	if err != nil {
@@ -78,39 +74,23 @@ func New(cfg *config.Config) (*Service, error) {
 		return nil, fmt.Errorf("stt: vad model: %w", err)
 	}
 
-	// PortAudio probes devices on init and spews ALSA/JACK warnings to the raw
-	// C-level stderr; silence it for that window only. Best-effort — a failure
-	// here is cosmetic, so proceed without it.
-	restore, _ := audio.SilenceStderr()
-	if err := portaudio.Initialize(); err != nil {
-		if restore != nil {
-			restore()
-		}
-		model.Close()
-		return nil, fmt.Errorf("stt: portaudio init: %w", err)
-	}
 	mic, err := audio.OpenCapture(vad.SampleRate, vad.Window)
-	if restore != nil {
-		restore()
-	}
 	if err != nil {
-		portaudio.Terminate()
 		model.Close()
 		return nil, fmt.Errorf("stt: open capture: %w", err)
 	}
 
-	// Teardown order: stop the mic, free the model, then terminate PortAudio.
+	// Teardown order: stop the mic, then free the model.
 	closers := []func() error{
 		mic.Close,
 		model.Close,
-		portaudio.Terminate,
 	}
 	return start(rec, mic, model, cfg.VAD.ToTiming(), closers), nil
 }
 
 // NewWith starts a pipeline over caller-supplied components and owns none of
 // them — the caller closes src/det. Use it in tests (scripted Source/Detector,
-// no PortAudio) or when ../voices already owns the audio device and
+// no mic) or when ../voices already owns the audio device and
 // feeds STT from a shared source. Timing comes from config.VADConfig.ToTiming
 // or vad.DefaultTiming.
 func NewWith(src asr.Source, det asr.Detector, rec asr.Recognizer, t vad.Timing) *Service {

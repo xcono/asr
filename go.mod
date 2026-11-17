@@ -2,12 +2,12 @@ module github.com/xcono/asr
 
 go 1.25.0
 
-require (
-	github.com/gordonklaus/portaudio v0.0.0-20260203164431-765aa7dfa631
-	github.com/gorilla/websocket v1.5.3
-)
+require github.com/gorilla/websocket v1.5.3
 
-require github.com/zserge/govad v0.0.0-20260330155402-74750eabf3a4
+require (
+	github.com/jfreymuth/pulse v0.1.1
+	github.com/zserge/govad v0.0.0-20260330155402-74750eabf3a4
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

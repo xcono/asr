@@ -16,8 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gordonklaus/portaudio"
-
 	stt "github.com/xcono/asr"
 	"github.com/xcono/asr/pkg/asr"
 	"github.com/xcono/asr/pkg/audio"
@@ -51,29 +49,11 @@ func run(cfg *config.Config) error {
 	timing := cfg.VAD.ToTiming()
 
 	// --- Audio capture ---
-	restore, err := audio.SilenceStderr()
-	if err != nil {
-		log.Printf("warning: could not suppress portaudio stderr: %v", err)
-	}
-	if restore != nil {
-		defer restore()
-	}
-
-	if err := portaudio.Initialize(); err != nil {
-		return fmt.Errorf("portaudio init: %w", err)
-	}
-	defer portaudio.Terminate()
-
 	mic, err := audio.OpenCapture(vad.SampleRate, vad.Window)
 	if err != nil {
 		return fmt.Errorf("open capture: %w", err)
 	}
 	defer mic.Close()
-
-	// Restore stderr after capture is live.
-	if restore != nil {
-		restore()
-	}
 
 	// --- ASR recognizer ---
 	rec, err := stt.NewRecognizer(cfg.ASR)
@@ -119,7 +99,7 @@ func run(cfg *config.Config) error {
 	}
 
 	if n := mic.Overflows(); n > 0 {
-		log.Printf("note: tolerated %d mic input overflow(s)", n)
+		log.Printf("note: dropped %d mic packet(s): the pipeline fell behind", n)
 	}
 	return nil
 }

@@ -42,15 +42,17 @@ Audio format is fixed: **16 kHz / 16-bit / little-endian / mono**, in
 ## Build & run
 
 ```bash
-make deps     # PortAudio headers (sudo apt install portaudio19-dev)
 make          # run cmd/vox (loads config.json from the working directory)
 make build    # compile to ./bin/vox
 make test     # go test ./...
 make help     # list all targets
 ```
 
-PortAudio (mic capture) is the only native dependency. The Silero VAD is pure
-Go ([`zserge/govad`](https://github.com/zserge/govad)) with the v5 weights
+No native dependencies: the module builds with `CGO_ENABLED=0`. Mic capture
+talks to PulseAudio (or PipeWire's pulse layer) in pure Go via
+[`jfreymuth/pulse`](https://github.com/jfreymuth/pulse); it needs a running
+PulseAudio/`pipewire-pulse` server, nothing to install at build time. The
+Silero VAD is pure Go ([`zserge/govad`](https://github.com/zserge/govad)) with the v5 weights
 embedded in the binary — no model file, no ONNX Runtime.
 
 ## Config
