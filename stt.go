@@ -258,9 +258,10 @@ func NewRecognizer(c config.ASRConfig) (asr.Recognizer, error) {
 		w := c.Whisper
 		// Plain json, not Verbose. verbose_json was on for a day (2026-11-18) to
 		// log no_speech_prob / avg_logprob; the scores did not separate
-		// hallucinations from speech, and it was switched off while a
-		// whisper-server hang (same audio: right text, wrong text, then a
-		// spinning thread) was being isolated. The cause is not established.
+		// hallucinations from speech. It was switched off while a
+		// whisper-server instability was being isolated; that turned out to be
+		// on the GPU side (Xid 13 with plain json too), not the format — see
+		// AGENTS.md. Nothing uses the scores, so it stays off.
 		return &asr.Transcriber{BaseURL: w.BaseURL, Model: w.Model, Language: w.Language, Prompt: w.Prompt}, nil
 	case "elevenlabs":
 		return &asr.ElevenLabs{

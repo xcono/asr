@@ -225,16 +225,32 @@ output is float32 [-1,1], not int16.
 - **`Event.VoiceFileID` is never set** by the pipeline.
 - **A failed transcription is logged, not emitted.** `Listen` prints
   `asr: transcription failed: at=… …: <cause>` and the turn ends at
-  `SpeechEnd`; `SpeechError` stays terminal (source failure only). Seen live
-  on 2026-11-18: whisper-server hung on one request (one thread at 100% CPU,
-  GPU idle, `/health` still 200, container "healthy"), every later request
-  timed out after `DefaultTimeout` (30 s) — the cause of the hang is not
-  established; `docker restart asr-stt-1` clears it.
-- **`Transcriber.Verbose` is whisper-only.** The GigaAM server answers 400 to
-  any `response_format` but `json|text`. `NewRecognizer` sets it for no
-  provider since 2026-11-18 (whisper went back to plain json while the server
-  hang above was being isolated), so `Segments` is nil and `vox` logs no
-  `no_speech=`/`logprob=`.
+  `SpeechEnd`; `SpeechError` stays terminal (source failure only).
+- **whisper-server became unstable after the host reboot of 2026-11-18
+  (15:01); cause not established, it is on the GPU side.** Before that reboot
+  the same image, client and config ran several hundred requests cleanly.
+  After it, with `verbose_json`: the server hung four times on a request (one
+  thread at 100% CPU in user time, GPU idle, `/health` still 200, container
+  "healthy", later requests time out after `DefaultTimeout` 30 s), and the
+  same WAV bytes sent five times gave the right text, the right text, then a
+  hallucination, then a hang. After switching the client back to plain
+  `json`: no hang in a short test, but a 12 s clip aborted the server with
+  `CUDA error: unspecified launch failure` in `cudaStreamSynchronize`
+  (ggml-cuda.cu:2948) and the kernel logged `NVRM: Xid 13, Graphics
+  Exception` for whisper-server on GPU 1 (PCI 03:00); the client saw
+  `Post …: EOF` and the container restarted itself. So the response format is
+  not the cause — `verbose_json` only adds CPU-side post-processing that
+  cannot change the decoded text. What a hang looks like in `vox`: VAD
+  segments with no `stt:` line, then `transcription failed` 30 s later;
+  `docker restart asr-stt-1` clears it. Not yet checked: whether a cold power
+  cycle clears it, the upstream (non-sm_120) image as a control, sharing
+  GPU 1 with the TTS container.
+- **`Transcriber.Verbose` is whisper-only and currently unused.** The GigaAM
+  server answers 400 to any `response_format` but `json|text`.
+  `NewRecognizer` sets it for no provider since 2026-11-18: whisper went back
+  to plain json during the investigation above, and the scores it carried
+  (`no_speech_prob`, `avg_logprob`) had not separated hallucinations from
+  speech anyway. `Segments` is nil and `vox` logs no `no_speech=`/`logprob=`.
 - **`stt.NewWith` does not filter, dump or record by default.** Pass
   `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` (slack defaults to 12;
   add `stt.WithCharsSlack(cfg.CharsSlackOrDefault())` to honour a configured

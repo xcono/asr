@@ -282,8 +282,9 @@ that ffmpeg, sox and `audio.DecodeWAV` read up to the end of the file.
 The client requests plain `response_format=json`. `asr.Transcriber` can ask
 for `verbose_json` (`Verbose: true`, with `no_language_probabilities=true`) to
 get whisper.cpp's per-segment scores, but `stt.NewRecognizer` leaves it off
-since 2026-11-18: the scores did not separate hallucinations from speech, and
-it was disabled while a whisper-server hang was being isolated. With it on,
+since 2026-11-18: the scores did not separate hallucinations from speech. (It
+was switched off while a whisper-server instability was being isolated; the
+format turned out not to be the cause.) With it on,
 `vox` logs each turn as
 
 ```
