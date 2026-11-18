@@ -279,8 +279,12 @@ behind ...`), so `at=` stays aligned. The WAV header is finalised when `vox`
 exits through Ctrl-C/SIGTERM; a file from a crash keeps placeholder lengths
 that ffmpeg, sox and `audio.DecodeWAV` read up to the end of the file.
 
-For `whisper` the client requests `response_format=verbose_json` (with
-`no_language_probabilities=true`) and `vox` logs each turn as
+The client requests plain `response_format=json`. `asr.Transcriber` can ask
+for `verbose_json` (`Verbose: true`, with `no_language_probabilities=true`) to
+get whisper.cpp's per-segment scores, but `stt.NewRecognizer` leaves it off
+since 2026-11-18: the scores did not separate hallucinations from speech, and
+it was disabled while a whisper-server hang was being isolated. With it on,
+`vox` logs each turn as
 
 ```
 stt: "<text>" at=13.79s 1.23s 8 letters <= budget 17.8 6.5 chars/s vad_peak=0.97 speech_win=28/39 no_speech=0.012 logprob=-0.31 (voice_file_id=)

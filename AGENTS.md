@@ -231,8 +231,10 @@ output is float32 [-1,1], not int16.
   timed out after `DefaultTimeout` (30 s) — the cause of the hang is not
   established; `docker restart asr-stt-1` clears it.
 - **`Transcriber.Verbose` is whisper-only.** The GigaAM server answers 400 to
-  any `response_format` but `json|text`; `NewRecognizer` sets `Verbose` only
-  for `whisper`.
+  any `response_format` but `json|text`. `NewRecognizer` sets it for no
+  provider since 2026-11-18 (whisper went back to plain json while the server
+  hang above was being isolated), so `Segments` is nil and `vox` logs no
+  `no_speech=`/`logprob=`.
 - **`stt.NewWith` does not filter, dump or record by default.** Pass
   `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` (slack defaults to 12;
   add `stt.WithCharsSlack(cfg.CharsSlackOrDefault())` to honour a configured

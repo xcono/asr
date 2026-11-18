@@ -149,8 +149,8 @@ func TestServiceCloseIsIdempotent(t *testing.T) {
 }
 
 // TestRecognizerWhisper checks the facade maps the whisper config section onto
-// the batch client, including the whisper.cpp-only fields and Verbose (the
-// verbose_json scores cmd/vox logs).
+// the batch client, including the whisper.cpp-only fields, and leaves
+// Verbose off (plain json; see NewRecognizer).
 func TestRecognizerWhisper(t *testing.T) {
 	rec, err := NewRecognizer(config.ASRConfig{
 		Provider: "whisper",
@@ -163,7 +163,7 @@ func TestRecognizerWhisper(t *testing.T) {
 	if !ok {
 		t.Fatalf("recognizer type = %T, want *asr.Transcriber", rec)
 	}
-	want := asr.Transcriber{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p", Verbose: true}
+	want := asr.Transcriber{BaseURL: "http://w:8008/v1", Model: "m", Language: "ru", Prompt: "p"}
 	if *tr != want {
 		t.Fatalf("transcriber = %+v, want %+v", *tr, want)
 	}
