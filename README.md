@@ -146,9 +146,10 @@ All providers are batch: each VAD-segmented utterance is sent as one request.
 
 - **gigaam** (code default) — OpenAI-compatible `/v1/audio/transcriptions` at `base_url`.
 - **whisper** — the same client against the Whisper server (vLLM). `language`
-  (default `ru`) and `prompt` are sent only when non-empty. Leave `prompt`
-  empty: vLLM 0.32.0 corrupts decoding when one is sent
-  (vllm-project/vllm#53206).
+  (default `ru`) and `prompt` (a glossary that steers the spelling of terms)
+  are sent only when non-empty. `prompt` relies on the patch in
+  `llm/whisper/Dockerfile`; stock vLLM 0.32.0 returns garbage when one is
+  sent (vllm-project/vllm#53206).
 - **elevenlabs** — cloud ElevenLabs Scribe (`/v1/speech-to-text`, default model
   `scribe_v2`). Needs `api_key`; `language_code` is an optional hint.
 

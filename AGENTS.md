@@ -247,9 +247,14 @@ output is float32 [-1,1], not int16.
   with no `stt:` line and `transcription failed` (connection refused at once,
   or a timeout after `DefaultTimeout` 30 s). Not checked: GPU 0 as a
   control, running without the TTS container on the same card, a cold power
-  cycle.
-- **Keep `asr.whisper.prompt` empty.** vLLM 0.32.0 corrupts Whisper decoding
-  when a prompt is sent (vllm-project/vllm#53206).
+  cycle. A control series (six starts per card, alternating) did not
+  reproduce it on either GPU.
+- **`asr.whisper.prompt` works only with our patched image.** Stock vLLM
+  0.32.0 corrupts Whisper decoding when a prompt is sent
+  (vllm-project/vllm#53206); `llm/whisper/patches/01-whisper-prompt.patch`
+  fixes it and is tied to that version — on an upgrade re-derive or drop it,
+  then send a clip with a prompt and read the text (the failure is a 200
+  with garbage).
 - **`Transcriber.Verbose` is currently unused.** The GigaAM server answers
   400 to any `response_format` but `json|text`; `NewRecognizer` sets it for
   no provider since 2026-11-18 — the scores it carried on whisper.cpp
@@ -274,7 +279,8 @@ output is float32 [-1,1], not int16.
 
 Keep Python out of the Go codebase. The STT servers under `llm/` are external
 processes reached over HTTP: GigaAM and Qwen3-ASR are Python, Whisper is vLLM in a
-published image (no Dockerfile; flags in `docker.whisper.yaml`).
+published image with one patch (`llm/whisper/Dockerfile`; flags in
+`docker.whisper.yaml`).
 
 ## Development
 

@@ -1,9 +1,10 @@
 # Whisper large-v3-turbo (vLLM) STT backend
 
 Started by `docker.whisper.yaml` in the repo root: `vllm serve
-openai/whisper-large-v3-turbo` in the pinned image `vllm/vllm-omni:v0.32.0` (vLLM 0.32.0,
-PyTorch 2.13.0+cu130). There is no Dockerfile — the image is used as published and every
-setting is a flag in the compose file.
+openai/whisper-large-v3-turbo` in `./Dockerfile` — the pinned image
+`vllm/vllm-omni:v0.32.0` (vLLM 0.32.0, PyTorch 2.13.0+cu130) plus one patch that makes the
+`prompt` field work. Every setting is a flag in the compose file. The first `up` builds
+the image (seconds; the 35 GB base must be on disk or gets pulled).
 
 ```bash
 make up-whisper      # docker compose -f docker.whisper.yaml up -d
@@ -33,7 +34,8 @@ kernels on the RTX 5060 Ti (~20 s first request, 1–4 s per new prompt length);
 build for `120a-real` ran clean for a day and then, after a host reboot, hung on requests
 and crashed with `Xid 13` (details in `AGENTS.md`). vLLM's PyTorch lists `sm_120` among its
 supported architectures (`torch.cuda.get_arch_list()` in the container). The whisper.cpp
-Dockerfile, image and model volume are removed; they are in git history before this change.
+Dockerfile, image and model volume are removed; that Dockerfile is in git history
+(before commit 371b147).
 
 ## Flags that are not optional on this card
 
@@ -58,7 +60,10 @@ timed. A container stuck there
 stays `unhealthy` — Docker does not restart it; `docker restart asr-stt-1` does. This is
 the same picture whisper.cpp showed on the same GPU (a thread spinning, GPU idle), so it
 may not be specific to either server. Not established: the cause, and whether it can
-happen on a request after start (none of 30 requests stalled).
+happen on a request after start (none of 30 requests stalled). A control series the same
+evening — six starts on GPU 0 and six on GPU 1, alternating — did not reproduce it: all
+twelve were ready in 32–33 s (engine init 9.0–9.1 s) on both cards. Both slow starts had
+whisper.cpp on the card or stopped seconds before; whether that matters is unknown.
 
 ## HTTP contract (measured 2026-11-18)
 
@@ -74,10 +79,17 @@ happen on a request after start (none of 30 requests stalled).
   `whisper`.
 - `language`: `ru` is what the client sends. Omitted, the server detected Russian on the
   one clip tried (0.24 s instead of 0.08 s). There is no server-side default language.
-- `prompt`: **do not send one.** vLLM splices it after a literal `<|prev|>`, which is not a
-  Whisper token, and decoding degrades (vllm-project/vllm#53206, open; the line is in
-  0.32.0, `vllm/model_executor/models/whisper.py`). Keep `asr.whisper.prompt` empty. This
-  loses the term-spelling glossary that worked on whisper.cpp.
+- `prompt`: works **only because of `patches/01-whisper-prompt.patch`**. Stock vLLM
+  0.32.0 splices the prompt after a literal `<|prev|>`, which is not a Whisper token
+  (vllm-project/vllm#53206, open); measured here, a glossary prompt turned a Russian
+  sentence into `Dokumentaçao po razvozvirtuanyu vysper v VLLM Omni…`. The patch is the
+  change proposed upstream in vllm-project/vllm#53207: `<|startofprev|>` and no extra
+  `<|startoftranscript|>` in front of it. With it, on five clips of dictated technical
+  Russian and the glossary `Whisper, vLLM-Omni, OmniVoice, ref_text, dropped, config.json,
+  vox, ASR.`: `ВИСПР в VLLM ОМНИ` → `Whisper в vLLM-Omni`, `Omni Voice` → `OmniVoice`,
+  `Vox` → `vox`; not fixed: `Dropit` (said "dropped"), `ревтекст` (said "ref_text"). The
+  rest of each sentence was unchanged, as were requests without a prompt; no extra time
+  (0.09–0.11 s). Not measured: how long a prompt may be and which end is cut.
 - Decoding is greedy. whisper.cpp ran beam 5 because its greedy mode looped on 3–4 s
   clips; no loop was seen here in 30 requests, including the same clip three times with
   identical text. Beam search exists (`use_beam_search`) and vLLM's docs call it highly

@@ -12,8 +12,9 @@
 # here until 2026-11-18, does not target that card (upstream image: archs 75–90 only; our
 # own sm_120 build hung and crashed with Xid 13 — see AGENTS.md).
 #
-# The image is the one xcono/tts already uses (35 GB, on disk once for both): Whisper is
-# served by the plain vLLM inside it, without --omni. vLLM-Omni itself has no STT models.
+# The base image is the one xcono/tts already uses (35 GB, on disk once for both): Whisper
+# is served by the plain vLLM inside it, without --omni. vLLM-Omni itself has no STT models.
+# llm/whisper/Dockerfile adds one small patch on top (the `prompt` field).
 #
 # Weights (openai/whisper-large-v3-turbo, 1.5 GB) live in the shared HF cache volume. On a
 # machine without them run the first `up` with HF_HUB_OFFLINE=0.
@@ -25,7 +26,12 @@ name: asr
 
 services:
   stt:
-    image: vllm/vllm-omni:v0.32.0    # PINNED: the flags below were checked on this version
+    # vllm/vllm-omni:v0.32.0 (PINNED in the Dockerfile; the flags below were checked on it)
+    # plus one patch that makes the `prompt` field work. Build with BUILDX_BUILDER=default
+    # so the 35 GB base is not pulled again into a container builder's own cache.
+    build:
+      context: ./llm/whisper
+    image: xcono-asr-whisper
     ipc: host                        # vLLM's worker processes share memory
     ports:
       - "8008:8008"

@@ -1,0 +1,31 @@
+--- a/model_executor/models/whisper.py	2026-10-18 10:08:32.000000000 +0700
++++ b/model_executor/models/whisper.py	2026-11-18 19:37:44.372382842 +0700
+@@ -742,6 +742,10 @@
+ 
+ 
+ class WhisperMultiModalProcessor(EncDecMultiModalProcessor[WhisperProcessingInfo]):
++    # xcono patch (vllm-project/vllm#53207): the decoder prompt below is complete;
++    # do not prepend <|startoftranscript|> in front of <|startofprev|>.
++    skip_decoder_start_token: bool = True
++
+     def _get_hf_mm_text(self, mm_counts: Mapping[str, int]) -> str:
+         return self.dummy_inputs.get_dummy_text(mm_counts)
+ 
+@@ -851,7 +855,7 @@
+         stt_config = stt_params.stt_config
+         language = stt_params.language
+         task_type = stt_params.task_type
+-        request_prompt = stt_params.request_prompt
++        request_prompt = (stt_params.request_prompt or "").strip()
+ 
+         if language is None:
+             raise ValueError(
+@@ -859,7 +863,7 @@
+             )
+ 
+         decoder_text = (
+-            f"<|prev|>{request_prompt}" if request_prompt else ""
++            f"<|startofprev|> {request_prompt}" if request_prompt else ""
+         ) + f"<|startoftranscript|><|{language}|><|{task_type}|><|notimestamps|>"
+ 
+         return ExplicitEncoderDecoderPrompt(

@@ -47,7 +47,7 @@ up-qwen:
 ## up-whisper: start the Whisper large-v3-turbo batch STT server (:8008, vLLM)
 .PHONY: up-whisper
 up-whisper:
-	docker compose -f docker.whisper.yaml up -d
+	BUILDX_BUILDER=default docker compose -f docker.whisper.yaml up -d
 
 ## down: stop the GigaAM or Qwen STT server (same `asr` project)
 .PHONY: down
