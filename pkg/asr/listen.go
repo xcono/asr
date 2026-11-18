@@ -295,8 +295,21 @@ func Listen(ctx context.Context, src Source, det Detector, rec Recognizer, t vad
 				utter = nil
 				wg.Go(func() {
 					tr, err := transcribe(ctx, rec, clip)
-					if err != nil || tr.Text == "" {
-						return // skip silent/failed turns
+					if err != nil {
+						// Log it: a failed turn used to vanish, so a hung STT
+						// server (every request timing out) looked like the
+						// VAD hearing speech and nothing else happening. Not a
+						// SpeechError — that kind is terminal and the next
+						// turn may well succeed. Cancellation is a shutdown,
+						// not a failure.
+						if ctx.Err() == nil {
+							log.Printf("asr: transcription failed: at=%.2fs %.2fs: %v",
+								at.Seconds(), float64(len(clip))/vad.SampleRate, err)
+						}
+						return
+					}
+					if tr.Text == "" {
+						return // skip silent turns
 					}
 					ev := Event{
 						Kind:     SpeechText,

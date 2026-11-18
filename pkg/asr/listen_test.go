@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -132,6 +133,38 @@ func TestListenSkipsEmptyTranscription(t *testing.T) {
 	}
 	if got[0].Kind != SpeechStart || got[1].Kind != SpeechEnd {
 		t.Errorf("got kinds %v,%v; want SpeechStart,SpeechEnd", got[0].Kind, got[1].Kind)
+	}
+}
+
+type failingRecognizer struct{ err error }
+
+func (r failingRecognizer) Transcribe(context.Context, []int16, int) (string, error) {
+	return "", r.err
+}
+
+// A failed transcription must leave a trace and must not end the stream: a
+// hung STT server once made every turn time out, and the log showed VAD
+// segments with nothing after them. It is logged, not emitted as SpeechError
+// (terminal), so the events are the same as for an empty transcription.
+func TestListenLogsFailedTranscription(t *testing.T) {
+	var buf strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	probs := speechThenSilence()
+	src := &fakeSource{frames: len(probs), buf: make([]int16, vad.Window)}
+	det := &fakeDetector{probs: probs}
+	rec := failingRecognizer{err: errors.New("context deadline exceeded")}
+
+	got := collectEvents(Listen(context.Background(), src, det, rec, vad.DefaultTiming()), 2*time.Second)
+
+	if len(got) != 2 || got[0].Kind != SpeechStart || got[1].Kind != SpeechEnd {
+		t.Fatalf("got events %+v, want SpeechStart,SpeechEnd only", got)
+	}
+	if out := buf.String(); !strings.Contains(out, "asr: transcription failed") ||
+		!strings.Contains(out, "context deadline exceeded") {
+		t.Errorf("log = %q, want the transcription failure and its cause", out)
 	}
 }
 

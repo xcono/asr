@@ -223,6 +223,13 @@ output is float32 [-1,1], not int16.
 - **All providers are batch.** `asr.StreamSession` / `DialStream` and
   `vad.EndOfTurn` are implemented and tested but not wired into `Listen`.
 - **`Event.VoiceFileID` is never set** by the pipeline.
+- **A failed transcription is logged, not emitted.** `Listen` prints
+  `asr: transcription failed: at=… …: <cause>` and the turn ends at
+  `SpeechEnd`; `SpeechError` stays terminal (source failure only). Seen live
+  on 2026-11-18: whisper-server hung on one request (one thread at 100% CPU,
+  GPU idle, `/health` still 200, container "healthy"), every later request
+  timed out after `DefaultTimeout` (30 s) — the cause of the hang is not
+  established; `docker restart asr-stt-1` clears it.
 - **`Transcriber.Verbose` is whisper-only.** The GigaAM server answers 400 to
   any `response_format` but `json|text`; `NewRecognizer` sets `Verbose` only
   for `whisper`.
