@@ -31,7 +31,7 @@ test:
 # ====== model server (docker compose) ======================================
 # The STT server on :8008 — three interchangeable backends as standalone composes; run ONE.
 # `up` = GigaAM (batch, ru-only); `up-qwen` = Qwen3-ASR (streaming WS /v1/asr/stream,
-# multilingual); `up-whisper` = Whisper large-v3-turbo on whisper.cpp (batch, multilingual).
+# multilingual); `up-whisper` = Whisper large-v3-turbo on vLLM (batch, multilingual).
 # DO NOT build/up in a sandbox — needs the GPU box + NVIDIA toolkit.
 
 ## up: start the default GigaAM batch STT server (:8008)
@@ -44,7 +44,7 @@ up:
 up-qwen:
 	docker compose -f docker.qwen.yaml up -d
 
-## up-whisper: start the Whisper large-v3-turbo batch STT server (:8008, whisper.cpp)
+## up-whisper: start the Whisper large-v3-turbo batch STT server (:8008, vLLM)
 .PHONY: up-whisper
 up-whisper:
 	docker compose -f docker.whisper.yaml up -d
@@ -54,7 +54,7 @@ up-whisper:
 down:
 	docker compose -f docker.giga.yaml down
 
-## down-whisper: stop the Whisper STT server (keeps the model volume)
+## down-whisper: stop the Whisper STT server
 .PHONY: down-whisper
 down-whisper:
 	docker compose -f docker.whisper.yaml down

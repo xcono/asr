@@ -131,7 +131,7 @@ Mic → audio.Capture → asr.Listen → SpeechStart / SpeechEnd / SpeechText
 - `pkg/config` — schema + `Load`. `VADConfig.ToTiming()` lives here so all
   config-schema concerns stay in one package; `config` imports `vad` and `asr`
   (for `asr.DefaultCharsSlack`), never the reverse.
-- `llm/` + `docker.*.yaml` — the external STT servers (whisper.cpp, GigaAM,
+- `llm/` + `docker.*.yaml` — the external STT servers (Whisper on vLLM, GigaAM,
   Qwen3-ASR). Whisper's HTTP contract is in `llm/whisper/README.md`.
 
 ## Audio format (hard constraint)
@@ -226,31 +226,36 @@ output is float32 [-1,1], not int16.
 - **A failed transcription is logged, not emitted.** `Listen` prints
   `asr: transcription failed: at=… …: <cause>` and the turn ends at
   `SpeechEnd`; `SpeechError` stays terminal (source failure only).
-- **whisper-server became unstable after the host reboot of 2026-11-18
-  (15:01); cause not established, it is on the GPU side.** Before that reboot
-  the same image, client and config ran several hundred requests cleanly.
-  After it, with `verbose_json`: the server hung four times on a request (one
-  thread at 100% CPU in user time, GPU idle, `/health` still 200, container
-  "healthy", later requests time out after `DefaultTimeout` 30 s), and the
-  same WAV bytes sent five times gave the right text, the right text, then a
-  hallucination, then a hang. After switching the client back to plain
-  `json`: no hang in a short test, but a 12 s clip aborted the server with
-  `CUDA error: unspecified launch failure` in `cudaStreamSynchronize`
-  (ggml-cuda.cu:2948) and the kernel logged `NVRM: Xid 13, Graphics
-  Exception` for whisper-server on GPU 1 (PCI 03:00); the client saw
-  `Post …: EOF` and the container restarted itself. So the response format is
-  not the cause — `verbose_json` only adds CPU-side post-processing that
-  cannot change the decoded text. What a hang looks like in `vox`: VAD
-  segments with no `stt:` line, then `transcription failed` 30 s later;
-  `docker restart asr-stt-1` clears it. Not yet checked: whether a cold power
-  cycle clears it, the upstream (non-sm_120) image as a control, sharing
-  GPU 1 with the TTS container.
-- **`Transcriber.Verbose` is whisper-only and currently unused.** The GigaAM
-  server answers 400 to any `response_format` but `json|text`.
-  `NewRecognizer` sets it for no provider since 2026-11-18: whisper went back
-  to plain json during the investigation above, and the scores it carried
+- **Whisper runs on vLLM since 2026-11-18; whisper.cpp was dropped because
+  it does not target the RTX 50xx.** History: our sm_120 build of
+  whisper-server ran several hundred requests cleanly, then after a host
+  reboot (2026-11-18 15:01) hung four times on a request (one thread at 100%
+  CPU in user time, GPU idle, `/health` still 200) and once aborted with
+  `CUDA error: unspecified launch failure` + kernel `Xid 13` on GPU 1 (PCI
+  03:00). The response format was not the cause (it happened with both
+  `verbose_json` and `json`). The whisper.cpp Dockerfile is in git history.
+- **The vLLM Whisper server needs its attention backends set by hand.**
+  With vLLM's default (FlashAttention 2) on sm_120 every request returns 200
+  and the text `ewewew…` — a silent failure, so after any image or flag
+  change send a known clip and read the text. Flags and reasons:
+  `docker.whisper.yaml`, `llm/whisper/README.md`.
+- **A GPU-side stall is still open, and it is not whisper.cpp-specific.** One
+  of four vLLM starts hung in `torch.cuda.synchronize()` (100% CPU, GPU 1
+  idle, no Xid) until restarted — the same picture as the whisper.cpp hangs.
+  A container stuck at start is `unhealthy` and Docker does not restart it:
+  `docker restart asr-stt-1`. In `vox` a dead server shows as VAD segments
+  with no `stt:` line and `transcription failed` (connection refused at once,
+  or a timeout after `DefaultTimeout` 30 s). Not checked: GPU 0 as a
+  control, running without the TTS container on the same card, a cold power
+  cycle.
+- **Keep `asr.whisper.prompt` empty.** vLLM 0.32.0 corrupts Whisper decoding
+  when a prompt is sent (vllm-project/vllm#53206).
+- **`Transcriber.Verbose` is currently unused.** The GigaAM server answers
+  400 to any `response_format` but `json|text`; `NewRecognizer` sets it for
+  no provider since 2026-11-18 — the scores it carried on whisper.cpp
   (`no_speech_prob`, `avg_logprob`) had not separated hallucinations from
-  speech anyway. `Segments` is nil and `vox` logs no `no_speech=`/`logprob=`.
+  speech, and `verbose_json` is untested against vLLM. `Segments` is nil and
+  `vox` logs no `no_speech=`/`logprob=`.
 - **`stt.NewWith` does not filter, dump or record by default.** Pass
   `stt.WithMaxCharsPerSec(cfg.CharsPerSecLimit())` (slack defaults to 12;
   add `stt.WithCharsSlack(cfg.CharsSlackOrDefault())` to honour a configured
@@ -268,9 +273,8 @@ output is float32 [-1,1], not int16.
 ## Python
 
 Keep Python out of the Go codebase. The STT servers under `llm/` are external
-processes reached over HTTP: GigaAM and Qwen3-ASR are Python, Whisper is a
-locally built whisper.cpp image (`llm/whisper/Dockerfile`, compiled for sm_120
-because the upstream image has no RTX 50xx code).
+processes reached over HTTP: GigaAM and Qwen3-ASR are Python, Whisper is vLLM in a
+published image (no Dockerfile; flags in `docker.whisper.yaml`).
 
 ## Development
 

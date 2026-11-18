@@ -1,8 +1,6 @@
-# Whisper large-v3-turbo STT server — whisper.cpp `whisper-server` (CUDA), OpenAI-compatible
-# BATCH path (/v1/audio/transcriptions) on :8008. Multilingual; default language Russian.
-# Built locally from llm/whisper/Dockerfile (upstream whisper.cpp, compiled for sm_120): the upstream
-# prebuilt image has no RTX 50xx code and JIT-compiles kernels at run time. Measured contract and
-# the reason for the local build are in llm/whisper/README.md.
+# Whisper large-v3-turbo STT server — vLLM (`vllm serve`), OpenAI-compatible BATCH path
+# (/v1/audio/transcriptions) on :8008. Multilingual; the client sends the language.
+# Measured contract and the reasons for every flag are in llm/whisper/README.md.
 #
 #   docker compose -f docker.whisper.yaml up -d
 #
@@ -10,67 +8,53 @@
 # (Whisper, batch/multilingual), docker.giga.yaml (GigaAM, batch/ru) or docker.qwen.yaml
 # (Qwen3-ASR, streaming/multilingual). All expose `stt:8008` and join the `voices` network.
 #
-# Weights are NOT in the shared HF cache: whisper.cpp needs a single ggml file, not an HF
-# snapshot. The one-shot `model` service fetches it with the project's own
-# download-ggml-model.sh into the compose-managed `whisper-models` volume (created on first
-# `up`, ~1.6 GB, skipped once present), so a clean machine needs nothing pre-created.
+# WHY vLLM: its PyTorch build ships sm_120 (RTX 50xx) code officially. whisper.cpp, used
+# here until 2026-11-18, does not target that card (upstream image: archs 75–90 only; our
+# own sm_120 build hung and crashed with Xid 13 — see AGENTS.md).
+#
+# The image is the one xcono/tts already uses (35 GB, on disk once for both): Whisper is
+# served by the plain vLLM inside it, without --omni. vLLM-Omni itself has no STT models.
+#
+# Weights (openai/whisper-large-v3-turbo, 1.5 GB) live in the shared HF cache volume. On a
+# machine without them run the first `up` with HF_HUB_OFFLINE=0.
 #
 # Runs on GPU 1 by default (GPU 0 carries the desktop); override with ASR_GPU. DO NOT up in a
 # sandbox — needs the GPU box + NVIDIA Container Toolkit.
 
 name: asr
 
-x-whisper-image: &whisper-image
-  # whisper.cpp pinned to a commit and compiled with CMAKE_CUDA_ARCHITECTURES=120a-real.
-  build:
-    context: ./llm/whisper
-  image: xcono-asr-whisper
-
 services:
-  model:
-    <<: *whisper-image
-    # Download into a temp dir and rename, so an interrupted download never leaves a
-    # truncated file that the script's "already exists" check would then accept.
-    command:
-      - |
-        set -e
-        f=/models/ggml-$${WHISPER_MODEL}.bin
-        if [ -s "$$f" ]; then echo "model present: $$f"; exit 0; fi
-        rm -rf /models/.partial && mkdir -p /models/.partial
-        /app/models/download-ggml-model.sh "$${WHISPER_MODEL}" /models/.partial
-        mv "/models/.partial/ggml-$${WHISPER_MODEL}.bin" "$$f"
-        rm -rf /models/.partial
-    environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
-    volumes:
-      - whisper-models:/models
-    restart: "no"
-
   stt:
-    <<: *whisper-image
-    depends_on:
-      model:
-        condition: service_completed_successfully
+    image: vllm/vllm-omni:v0.32.0    # PINNED: the flags below were checked on this version
+    ipc: host                        # vLLM's worker processes share memory
     ports:
       - "8008:8008"
-    # --inference-path keeps the client's BaseURL=http://localhost:8008/v1 working unchanged.
-    # -l sets the default language; a per-request `language` field overrides it.
-    # --beam-size 5 matches whisper-cli's default: the server's own default (greedy) looped
-    # ("я задеплоил новый релиз, я задеплоил…") and varied run to run on 3–4 s RU clips;
-    # beam 5 gave the correct text on every repeat at ~0.1–0.4 s per clip.
+    # --attention-backend / --mm-encoder-attn-backend: REQUIRED on sm_120. vLLM's own choice
+    #   (bundled FlashAttention 2) loads fine and answers 200 with garbage — "ewewew…" up to
+    #   the token limit for any audio. With these two the text is correct.
+    # --kv-cache-memory-bytes + --gpu-memory-utilization: without them vLLM wants 92% of the
+    #   card and refuses to start next to the TTS server. With a fixed KV cache the
+    #   utilization value is only the start-up check; the process holds about 2.6 GB.
+    # No --max-num-seqs: a small value drops the batch below one audio item (1500 tokens)
+    #   and the server exits at start.
     command:
-      - >-
-        whisper-server
-        --host 0.0.0.0 --port 8008
-        --inference-path /v1/audio/transcriptions
-        -m /models/ggml-$${WHISPER_MODEL}.bin
-        -l $${WHISPER_LANGUAGE}
-        --beam-size 5
+      - vllm
+      - serve
+      - openai/whisper-large-v3-turbo
+      - --host=0.0.0.0
+      - --port=8008
+      - --served-model-name=whisper
+      - --attention-backend=TRITON_ATTN
+      - --mm-encoder-attn-backend=TORCH_SDPA
+      - --kv-cache-memory-bytes=536870912
+      - --gpu-memory-utilization=0.5
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
-      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}     # "auto" to detect per request
+      HF_HOME: /root/.cache/huggingface
+      # Weights come from the shared cache; never reach out to the Hub at start.
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-1}
     volumes:
-      - whisper-models:/models:ro
+      - hf-cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -83,12 +67,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 300s             # about 100 s to ready with weights in the cache
     restart: unless-stopped
 
-# Compose-managed (not external): created on first `up`, survives `down` (not `down -v`).
+# Shared with the xcono/tts and xcono/voices stacks so weights are downloaded once.
 volumes:
-  whisper-models:
+  hf-cache:
+    name: llms_hf-cache
+    external: true
 
 # Literal `voices` network so this service and the voices orchestrator co-reside.
 networks:

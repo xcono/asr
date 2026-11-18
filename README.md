@@ -145,10 +145,10 @@ a deaf model or non-speech, just under `threshold` is a tuning question.
 All providers are batch: each VAD-segmented utterance is sent as one request.
 
 - **gigaam** (code default) — OpenAI-compatible `/v1/audio/transcriptions` at `base_url`.
-- **whisper** — the same client against the whisper.cpp server. `language`
-  (default `ru`; `auto` to detect — with a fixed language whisper.cpp translates
-  other languages instead of transcribing them) and `prompt` (decoder context
-  that steers spelling of terms) are sent only when non-empty.
+- **whisper** — the same client against the Whisper server (vLLM). `language`
+  (default `ru`) and `prompt` are sent only when non-empty. Leave `prompt`
+  empty: vLLM 0.32.0 corrupts decoding when one is sent
+  (vllm-project/vllm#53206).
 - **elevenlabs** — cloud ElevenLabs Scribe (`/v1/speech-to-text`, default model
   `scribe_v2`). Needs `api_key`; `language_code` is an optional hint.
 
@@ -281,10 +281,10 @@ that ffmpeg, sox and `audio.DecodeWAV` read up to the end of the file.
 
 The client requests plain `response_format=json`. `asr.Transcriber` can ask
 for `verbose_json` (`Verbose: true`, with `no_language_probabilities=true`) to
-get whisper.cpp's per-segment scores, but `stt.NewRecognizer` leaves it off
-since 2026-11-18: the scores did not separate hallucinations from speech. (It
-was switched off while a whisper-server instability was being isolated; the
-format turned out not to be the cause.) With it on,
+get per-segment scores, but `stt.NewRecognizer` leaves it off since
+2026-11-18: the scores (measured on whisper.cpp) did not separate
+hallucinations from speech. `verbose_json` has not been exercised against the
+vLLM server. With it on,
 `vox` logs each turn as
 
 ```
@@ -305,10 +305,10 @@ box and the NVIDIA Container Toolkit.
 
 | Backend | Compose file | Dir | Mode | Command |
 |---|---|---|---|---|
-| Whisper large-v3-turbo (whisper.cpp) | `docker.whisper.yaml` | `llm/whisper` | batch, multilingual | `make up-whisper` / `make down-whisper` |
+| Whisper large-v3-turbo (vLLM) | `docker.whisper.yaml` | `llm/whisper` | batch, multilingual | `make up-whisper` / `make down-whisper` |
 | GigaAM v3 | `docker.giga.yaml` | `llm/giga3` | batch, Russian-only | `make up` / `make down` |
 | Qwen3-ASR-1.7B | `docker.qwen.yaml` | `llm/qwen3` | streaming (WS `/v1/asr/stream`), multilingual | `make up-qwen` / `make down` |
 
 `xcono/voices` picks the backend through its own compose
-(`../asr/docker.${ASR_BACKEND:-giga}.yaml`). The whisper.cpp HTTP contract is
-described in [`llm/whisper/README.md`](llm/whisper/README.md).
+(`../asr/docker.${ASR_BACKEND:-giga}.yaml`). The Whisper server's flags and HTTP
+contract are described in [`llm/whisper/README.md`](llm/whisper/README.md).

@@ -245,7 +245,7 @@ func (s *Service) Close() error {
 }
 
 // NewRecognizer builds the STT provider from config: local GigaAM ("gigaam"),
-// local whisper.cpp ("whisper" — the same batch client plus language/prompt)
+// local Whisper (vLLM) ("whisper" — the same batch client plus language/prompt)
 // or cloud ElevenLabs Scribe ("elevenlabs"). It is the only provider switch:
 // cmd/vox and the facade both call it. Exported so consumers that inject
 // components via NewWith (e.g. ../voices WAV replay) build the same provider

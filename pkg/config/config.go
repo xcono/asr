@@ -111,12 +111,12 @@ type GigaAMConfig struct {
 	Model   string `json:"model"`    // Optional model name
 }
 
-// WhisperConfig holds configuration for the local whisper.cpp batch STT server
+// WhisperConfig holds configuration for the local Whisper batch STT server (vLLM)
 // (docker.whisper.yaml). Language and Prompt map to the request fields of the
 // same name; see llm/whisper/README.md for how the server treats them.
 type WhisperConfig struct {
 	BaseURL  string `json:"base_url"` // e.g. "http://localhost:8008/v1"
-	Model    string `json:"model"`    // Optional; whisper.cpp ignores it
+	Model    string `json:"model"`    // Optional; the server does not require it
 	Language string `json:"language"` // Default "ru"; "auto" to detect
 	Prompt   string `json:"prompt"`   // Optional decoder context; empty by default
 }

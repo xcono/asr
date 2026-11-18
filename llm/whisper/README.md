@@ -1,75 +1,87 @@
-# Whisper large-v3-turbo (whisper.cpp) STT backend
+# Whisper large-v3-turbo (vLLM) STT backend
 
-Started by `docker.whisper.yaml` in the repo root, which builds `./Dockerfile`: upstream
-whisper.cpp pinned to commit `5922450f` (CUDA 13.0, ships `whisper-server`,
-`download-ggml-model.sh`, `curl`, `ffmpeg`), compiled for the RTX 50xx
-(`CMAKE_CUDA_ARCHITECTURES=120a-real`).
+Started by `docker.whisper.yaml` in the repo root: `vllm serve
+openai/whisper-large-v3-turbo` in the pinned image `vllm/vllm-omni:v0.32.0` (vLLM 0.32.0,
+PyTorch 2.13.0+cu130). There is no Dockerfile — the image is used as published and every
+setting is a flag in the compose file.
 
 ```bash
 make up-whisper      # docker compose -f docker.whisper.yaml up -d
-make down-whisper    # keeps the model volume
+make down-whisper
 ```
-
-The first `up` builds the image (about 7 minutes) and downloads the model (~1.6 GB).
 
 | | |
 |---|---|
-| Model | `ggml-large-v3-turbo.bin`, 1 624 555 275 B, sha256 `1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69` (fp16, not quantized; same as the LFS hash on huggingface.co/ggerganov/whisper.cpp) |
-| Where | compose volume `asr_whisper-models` → `/models` (filled by the one-shot `model` service) |
-| GPU | `ASR_GPU` (default `1`); about 2 GB VRAM in use after a few requests |
-| Env | `WHISPER_MODEL` (default `large-v3-turbo`), `WHISPER_LANGUAGE` (default `ru`, `auto` to detect) |
-| Speed | 0.12 s for a 3 s clip, 0.17 s for 7 s, 0.5 s for 25 s (beam 5, RTX 5060 Ti) |
+| Model | `openai/whisper-large-v3-turbo`, HF snapshot `41f01f3f`, `model.safetensors` 1 617 824 864 B (fp16) |
+| Where | shared HF cache volume `llms_hf-cache` (first `up` on a clean machine: `HF_HUB_OFFLINE=0`) |
+| GPU | `ASR_GPU` (default `1`); 2.6 GB VRAM, constant |
+| Start | 21 s to `/health` 200 with weights cached, when it does not stall (see "Start-up stall") |
+| Speed | 0.08 s for a 2.5 s clip, 0.11 s for 8.6 s; first request after start 0.55 s (greedy, RTX 5060 Ti) |
 
-## Why a local build (RTX 50xx / sm_120)
+Docs used: vLLM's
+[Speech to Text APIs](https://github.com/vllm-project/vllm/blob/v0.32.0/docs/serving/online_serving/speech_to_text.md)
+and `vllm serve --help=all` in the container. vLLM-Omni's own docs cover TTS only
+(`/v1/audio/speech`); it lists no STT model. Whisper is served by the plain vLLM inside the
+image, without `--omni`. The image was chosen because `xcono/tts` already has it on disk;
+`vllm/vllm-openai:v0.32.0` should behave the same and was not tried.
 
-The upstream image `ghcr.io/ggml-org/whisper.cpp:main-cuda` is built for
-`CMAKE_CUDA_ARCHITECTURES='75;80;86;90'` and carries no sm_120 code. On the RTX 5060 Ti
-(compute capability 12.0) it still runs, but the driver JIT-compiles each ggml kernel on
-first use. Measured on this machine, same commit, same model:
+## Why vLLM and not whisper.cpp (RTX 50xx / sm_120)
 
-| | upstream image | this build |
-|---|---|---|
-| server log | `CUDA : ARCHS = 750,800,860,900` | `CUDA : ARCHS = 1200` |
-| first request on a fresh container | ~20.5 s | 0.17–0.22 s |
-| first request with a new prompt length (1–13 tokens) | 1.1–4.0 s each | 0.11–0.12 s |
-| driver JIT cache (`/root/.nv`) after use | ~104 MB | 8 KB (nothing compiled) |
-| transcripts on the test clips, with and without a prompt | — | byte-identical |
+Until 2026-11-18 this backend was whisper.cpp's `whisper-server`. whisper.cpp does not
+target this card: the upstream image is built for CUDA archs 75–90 and JIT-compiled its
+kernels on the RTX 5060 Ti (~20 s first request, 1–4 s per new prompt length); our own
+build for `120a-real` ran clean for a day and then, after a host reboot, hung on requests
+and crashed with `Xid 13` (details in `AGENTS.md`). vLLM's PyTorch lists `sm_120` among its
+supported architectures (`torch.cuda.get_arch_list()` in the container). The whisper.cpp
+Dockerfile, image and model volume are removed; they are in git history before this change.
 
-The image contains Blackwell device code only and does not run on older cards
-(`CUDA_ARCHITECTURES` build arg in the Dockerfile).
+## Flags that are not optional on this card
 
-Known oddity, unexplained: with a degenerate prompt (the same word repeated 6+ times,
-e.g. ` да да да да да да`) a 3 s clip takes 0.44 s on this build versus 0.12 s on the
-upstream image, with identical text. Seven realistic prompts (2–40 tokens) on two clips
-showed no difference in time or text.
+- `--attention-backend TRITON_ATTN --mm-encoder-attn-backend TORCH_SDPA`. Left to itself
+  vLLM picks its bundled FlashAttention 2, starts normally, answers 200 in 0.54 s — and the
+  text is `ewewew…` up to the token limit for any audio (8 of 8 clips). With these two
+  backends the text is right. Which of the two matters, and why FA2 is wrong here, was not
+  investigated.
+- `--kv-cache-memory-bytes 536870912 --gpu-memory-utilization 0.5`. By default vLLM asks
+  for 92% of the card and exits when the TTS server already holds part of it. With the KV
+  cache fixed, the utilization value is only a start-up check.
+- No `--max-num-seqs`: with `2` the batch (896 tokens) is smaller than one audio item
+  (1500) and the server exits with `Chunked MM input disabled but max_tokens_per_mm_item…`.
 
-## HTTP contract (measured 2026-11-17)
+## Start-up stall (open)
 
-`POST /v1/audio/transcriptions` (multipart), `GET /health` → `200 {"status":"ok"}`
-(returns `503 {"status":"loading model"}` while the model loads).
+One start out of four (2026-11-18) never became ready: the engine process sat at 100% CPU
+in `torch.cuda.synchronize()` → `cuCtxSynchronize` (native stack taken with gdb) with the
+GPU idle and nothing in the kernel log, for 8 minutes until restarted. Of the others, one
+spent 82 s in engine init (the same step, by the log timestamps), one 3.5 s, one was not
+timed. A container stuck there
+stays `unhealthy` — Docker does not restart it; `docker restart asr-stt-1` does. This is
+the same picture whisper.cpp showed on the same GPU (a thread spinning, GPU idle), so it
+may not be specific to either server. Not established: the cause, and whether it can
+happen on a request after start (none of 30 requests stalled).
+
+## HTTP contract (measured 2026-11-18)
+
+`POST /v1/audio/transcriptions` (multipart), `GET /health` → 200 once the engine is up
+(connection refused before that).
 
 - `file`: a WAV file. 16 kHz / 16-bit / mono with a 44-byte header (what `audio.EncodeWAV`
   writes) is accepted as is.
-- `response_format=json` → `{"text":"…"}`, `text` is the only field. The text starts with a
-  space and ends with `\n`. Longer audio also gets `\n ` between segments; the Go client
-  (`asr.Transcriber`) flattens this to one line.
-  `verbose_json` adds `task`, `language`, `duration`, `segments[]` (with `words[]`) and
-  `detected_language*`.
-- `model`: ignored on this path (any value, even an unknown one, gives the same 200 result).
-- `language`: if omitted, the server's `-l` is used (`ru` here). Russian works with
-  `language` omitted, `ru` or `auto`; `en` translates Russian speech into English. With the
-  `ru` default, English speech comes back translated into Russian, so English needs
-  `language=auto` or `en`. An unknown code (`xx`) still returns 200, with no error in the log.
-- `prompt`: accepted; it steers the spelling of terms. On a 25 s technical-Russian sample a
-  glossary prompt changed spellings to the prompt's forms (`race condition`,
-  `connection pool`, `Kibana`, `хотфиксом`); on a 3 s clip it did not fix a misheard word.
-  - The server uses the **last 223 tokens** of the prompt; a longer one is cut from the
-    beginning, so the glossary belongs at the end.
-  - Length costs little: 14 → 223 tokens adds 10–25 ms per request.
-  - Unrelated text dilutes a glossary: the same 14-token glossary after 209 tokens of filler
-    no longer fixed `хотфиксом` (one clip, one run).
-- Other per-request fields: `temperature`, `temperature_inc`, `beam_size`, `best_of`,
-  `no_timestamps`, `max_len`, `vad*`, `carry_initial_prompt` and more (see `server.cpp`).
-
-`--beam-size 5` is set on the server on purpose. With the server's greedy default, 3–4 s
-clips repeated phrases and gave a different text on each run.
+- `response_format=json` → `{"text":"…","usage":{"type":"duration","seconds":N}}`. The text
+  starts with a space; `asr.Transcriber` trims it. `verbose_json` is accepted by the API
+  but was not exercised here.
+- `model`: optional. Omitted works (the Go config keeps `"model": ""`); the served name is
+  `whisper`.
+- `language`: `ru` is what the client sends. Omitted, the server detected Russian on the
+  one clip tried (0.24 s instead of 0.08 s). There is no server-side default language.
+- `prompt`: **do not send one.** vLLM splices it after a literal `<|prev|>`, which is not a
+  Whisper token, and decoding degrades (vllm-project/vllm#53206, open; the line is in
+  0.32.0, `vllm/model_executor/models/whisper.py`). Keep `asr.whisper.prompt` empty. This
+  loses the term-spelling glossary that worked on whisper.cpp.
+- Decoding is greedy. whisper.cpp ran beam 5 because its greedy mode looped on 3–4 s
+  clips; no loop was seen here in 30 requests, including the same clip three times with
+  identical text. Beam search exists (`use_beam_search`) and vLLM's docs call it highly
+  inefficient for Whisper; not tried.
+- Hallucinations on noise are the model's, not the server's: clips from `dropped/` still
+  come back as `Продолжение следует...` and `Добавил субтитры DimaTorzok`. The letter
+  budget and the phrase list stay necessary.
